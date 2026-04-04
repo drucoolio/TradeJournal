@@ -1,0 +1,14 @@
+# VPS FastAPI bridge dependencies
+# Install with: pip install -r requirements.txt
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# MT5 Python library (Windows only — must have MT5 terminal installed)
+MetaTrader5==5.0.45
+
+# For running tests
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1          # async HTTP client used by TestClient
