@@ -86,6 +86,7 @@ function computeMetrics(trades: DbTrade[]) {
     byDate.set(date, { pnl: prev.pnl + t.net_pnl, count: prev.count + 1 });
   }
 
+  // Sort dates chronologically for the cumulative P&L chart
   const sortedDates = Array.from(byDate.keys()).sort();
   let cumPnl = 0;
   const dailyData = sortedDates.map(date => {
