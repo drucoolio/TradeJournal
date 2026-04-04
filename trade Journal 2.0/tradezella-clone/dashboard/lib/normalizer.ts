@@ -204,7 +204,7 @@ export function normalizeDeals(deals: RawDeal[]): TradeRow[] {
   // Step 2 & 3: Build TradeRow for each completed position
   const rows: TradeRow[] = [];
 
-  for (const [pid, pair] of byPosition.entries()) {
+  for (const [pid, pair] of Array.from(byPosition.entries())) {
     const outDeal = pair.out;
     const inDeal  = pair.in;
 

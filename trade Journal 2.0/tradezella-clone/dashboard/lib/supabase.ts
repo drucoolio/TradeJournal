@@ -92,10 +92,10 @@ export async function createSupabaseServer() {
       // Wrapped in try/catch because Server Components can't set cookies —
       // only Route Handlers and middleware can. The catch is a no-op for
       // Server Components; middleware handles the actual refresh.
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
         try {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            cookieStore.set(name, value, options)
+          cookiesToSet.forEach(({ name, value, options }: { name: string; value: string; options?: Record<string, unknown> }) =>
+            cookieStore.set(name, value, options as never)
           );
         } catch {
           // Called from a Server Component — silently ignore. The

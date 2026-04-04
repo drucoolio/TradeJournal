@@ -86,7 +86,7 @@ function computeMetrics(trades: DbTrade[]) {
     byDate.set(date, { pnl: prev.pnl + t.net_pnl, count: prev.count + 1 });
   }
 
-  const sortedDates = [...byDate.keys()].sort();
+  const sortedDates = Array.from(byDate.keys()).sort();
   let cumPnl = 0;
   const dailyData = sortedDates.map(date => {
     const d = byDate.get(date)!;
@@ -95,9 +95,9 @@ function computeMetrics(trades: DbTrade[]) {
   });
 
   const calendarData: Record<string, { pnl: number; count: number }> = {};
-  for (const [date, d] of byDate.entries()) calendarData[date] = d;
+  for (const [date, d] of Array.from(byDate.entries())) calendarData[date] = d;
 
-  const tradingDays = [...byDate.values()];
+  const tradingDays = Array.from(byDate.values());
   const winDays  = tradingDays.filter(d => d.pnl > 0).length;
   const lossDays = tradingDays.filter(d => d.pnl < 0).length;
   const dayWinPct = tradingDays.length ? (winDays / tradingDays.length) * 100 : 0;
@@ -214,8 +214,8 @@ export default async function OverviewPage({ searchParams }: PageProps) {
 
   // Fallback: ensure the currently active account is always in the list,
   // even if it was synced before Phase 3 (before user_id was added to accounts).
-  if (!allAccounts.find(a => a.login === account.login)) {
-    const current = await getAccountByLogin(account.login);
+  if (!allAccounts.find(a => a.login === Number(account.login))) {
+    const current = await getAccountByLogin(Number(account.login));
     if (current) allAccounts.unshift(current);
   }
 

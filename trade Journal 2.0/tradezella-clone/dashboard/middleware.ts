@@ -58,16 +58,16 @@ export async function middleware(request: NextRequest) {
         },
         // Write updated cookies to both the request (for downstream use) and
         // the response (so the browser receives the refreshed token)
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
           // Write to request object so Server Components see the updated cookies
-          cookiesToSet.forEach(({ name, value }) =>
+          cookiesToSet.forEach(({ name, value }: { name: string; value: string }) =>
             request.cookies.set(name, value)
           );
           // Create a new response with the updated request (carries the new cookies)
           supabaseResponse = NextResponse.next({ request });
           // Write updated cookies to the response headers (sent to the browser)
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+          cookiesToSet.forEach(({ name, value, options }: { name: string; value: string; options?: Record<string, unknown> }) =>
+            supabaseResponse.cookies.set(name, value, options as never)
           );
         },
       },
