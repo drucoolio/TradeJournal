@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
     // Map VPS AccountInfo → unified BrokerAccount type for the session cookie
     const account: BrokerAccount = {
       broker:      "mt5",
-      login:       info.login,       // MT5 account number (numeric, stored as string)
+      login:       String(info.login), // MT5 account number (convert from number to string)
       name:        info.name,
       server:      info.server,
       currency:    info.currency,
