@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Tradezella Clone — Backend Architecture Flowchart</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --ink: #e6edf3;
+    --muted: #9aa4b2;
+    --accent: #6ee7b7;
+    --warn: #fbbf24;
+    --danger: #f87171;
+    --link: #7cc4ff;
+    --border: #30363d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.55; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 40px 28px 120px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.3px; }
+  h2 { font-size: 22px; margin: 44px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  h3 { font-size: 17px; margin: 22px 0 8px; color: var(--accent); }
+  p, li { color: var(--ink); font-size: 14.5px; }
+  .sub { color: var(--muted); font-size: 14px; margin-top: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin: 14px 0; }
+  .mermaid { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; overflow-x: auto; }
+  code { background: #0b1020; padding: 2px 6px; border-radius: 4px; color: #cde5ff; font-size: 13px; }
+  .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    margin-right: 6px; border: 1px solid var(--border); }
+  .tag.vps { color: #fca5a5; border-color: #7f1d1d; }
+  .tag.api { color: #93c5fd; border-color: #1e3a8a; }
+  .tag.db { color: #86efac; border-color: #065f46; }
+  .tag.client { color: #fde68a; border-color: #78350f; }
+  .tag.warn { color: var(--warn); border-color: #78350f; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 20px; }
+  .legend span { font-size: 12px; color: var(--muted); }
+  .note { background: #1a1f2b; border-left: 3px solid var(--warn); padding: 10px 14px;
+    margin: 10px 0; border-radius: 4px; font-size: 13.5px; color: #e2e8f0; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #111827; color: var(--accent); font-weight: 600; }
+  tr:nth-child(even) td { background: #151a24; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Tradezella Clone — Backend Architecture</h1>
+<p class="sub">A readable, hand-verified map of the real data flow across VPS, Next.js API, Supabase, and the MT5 sync pipeline. Each section is a single concern so a reviewer can target optimisations precisely.</p>
+
+<div class="legend">
+  <span><span class="tag vps">VPS</span> FastAPI bridge on Kamatera</span>
+  <span><span class="tag api">API</span> Next.js route handler</span>
+  <span><span class="tag db">DB</span> Supabase / Postgres</span>
+  <span><span class="tag client">UI</span> Browser / React</span>
+  <span><span class="tag warn">⚑</span> Optimisation hotspot</span>
+</div>
+
+<h2>1 · High-level system topology</h2>
+<div class="panel">
+<p>Three independent planes. The only writer to Supabase is the Next.js server (API routes). The VPS never touches the database — it is a thin stateless adapter around the MetaTrader5 Python library.</p>
+<div class="mermaid">
+flowchart LR
+  subgraph Browser["Browser (Next.js client)"]
+    UI[Pages and Client Components<br/>login, register, overview, trades,<br/>journal, day-view, settings, accounts]
+  end
+
+  subgraph Vercel["Next.js server (Vercel / local)"]
+    MW[middleware.ts<br/>Supabase SSR token refresh<br/>+ route protection]
+    API[/app/api/* route handlers/]
+    LIB[lib/*<br/>supabase.ts, vps.ts, db.ts,<br/>normalizer.ts, sync-mutex.ts,<br/>adapters/mt5.ts]
+  end
+
+  subgraph VPS["Kamatera VPS 79.108.225.44"]
+    FA[FastAPI main.py]
+    MT5C[mt5_client.py]
+    MT5[(MetaTrader5<br/>Python lib)]
+  end
+
+  subgraph Supa["Supabase cloud"]
+    PG[(Postgres<br/>accounts, mt5_credentials,<br/>trades, sessions, playbooks,<br/>tags, mistakes, rules,<br/>weekly_reviews)]
+    AUTH[(Supabase Auth<br/>email + password,<br/>Google OAuth planned)]
+    STO[(Supabase Storage<br/>screenshots)]
+    RT[(Realtime<br/>planned Phase 5)]
+  end
+
+  UI -- "fetch /api/*, RSC loaders" --> MW
+  MW --> API
+  API --> LIB
+  LIB -- "HTTP + X-API-Key" --> FA
+  FA --> MT5C --> MT5
+  LIB -- "service-role writes" --> PG
+  UI -- "anon key via @supabase/ssr" --> AUTH
+  API -- "verify session" --> AUTH
+  UI -.-> STO
+  UI -.-> RT
+
+  classDef vps fill:#3a1414,stroke:#7f1d1d,color:#fee2e2;
+  classDef api fill:#0d1f3a,stroke:#1e3a8a,color:#bfdbfe;
+  classDef db  fill:#0e2a1f,stroke:#065f46,color:#bbf7d0;
+  classDef cli fill:#2a1f06,stroke:#78350f,color:#fde68a;
+  class FA,MT5C,MT5 vps;
+  class MW,API,LIB api;
+  class PG,AUTH,STO,RT db;
+  class UI cli;
+</div>
+</div>
+
+<h2>2 · VPS FastAPI bridge</h2>
+<div class="panel">
+<p>Single-tenant, single-process FastAPI. Holds exactly one active MT5 session at a time — every <code>POST /connect</code> replaces the previous one. This is why the Next.js server serialises VPS access with an in-memory mutex.</p>
+<table>
+  <tr><th>Endpoint</th><th>Purpose</th><th>Notes</th></tr>
+  <tr><td><code>GET /health</code></td><td>Liveness + MT5 connected flag</td><td>Optional <code>X-API-Key</code></td></tr>
+  <tr><td><code>POST /connect</code></td><td>Log into an MT5 account (login, investor password, server)</td><td>Tears down previous session first</td></tr>
+  <tr><td><code>GET /account</code></td><td>Balance, equity, leverage, currency</td><td>Requires connected session</td></tr>
+  <tr><td><code>GET /trades</code></td><td>Open positions + recent closed deals (lookback hours)</td><td>Only OUT deals returned (<code>entry==1</code>)</td></tr>
+  <tr><td><code>GET /history</code></td><td>Full IN+OUT deals between optional from/to dates</td><td>Default from 2000-01-01</td></tr>
+</table>
+<div class="mermaid">
+sequenceDiagram
+  participant NX as Next.js (lib/vps.ts)
+  participant FA as FastAPI main.py
+  participant MT as mt5_client.py
+  participant M5 as MetaTrader5 lib
+  NX->>FA: POST /connect {login,pwd,server} + X-API-Key
+  FA->>MT: initialize(login,pwd,server)
+  MT->>M5: mt5.initialize + mt5.login
+  M5-->>MT: ok / error
+  MT-->>FA: AccountInfo or 401
+  FA-->>NX: JSON
+  NX->>FA: GET /history?from=...&to=...
+  FA->>MT: history_deals_get(naive UTC)
+  MT->>M5: deals[]
+  M5-->>MT: IN + OUT deals
+  MT-->>FA: normalized list
+  FA-->>NX: {deals[], meta}
+</div>
+<div class="note">⚑ <b>Single-session VPS.</b> Any concurrent <code>/connect</code> from two users would thrash the MT5 session. The mutex protects correctness but means sync throughput is capped at one account at a time across the whole deployment.</div>
+</div>
+
+<h2>3 · Next.js middleware and auth gate</h2>
+<div class="panel">
+<div class="mermaid">
+flowchart TD
+  R[Incoming request] --> MW[middleware.ts]
+  MW --> REF["supabase.auth.getUser()<br/>refresh JWT + rewrite Set-Cookie"]
+  REF --> PUB{Path public?<br/>/login, /register, /api/auth/*}
+  PUB -- yes --> PASS[Continue]
+  PUB -- no --> AU{User signed in?}
+  AU -- no --> LOG[Redirect /login]
+  AU -- yes --> ON{On /login or /register?}
+  ON -- yes --> OV[Redirect /overview]
+  ON -- no --> PASS
+  PASS --> HAND[Route handler or RSC]
+</div>
+<div class="note">⚑ The middleware must return the same <code>supabaseResponse</code> object so refreshed cookies stick. A stray <code>new NextResponse()</code> silently logs users out after 15 min. Worth a comment in code.</div>
+</div>
+
+<h2>4 · Account connect flow (<code>POST /api/connect</code>)</h2>
+<div class="panel">
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant U as User (browser)
+  participant CP as /connect page
+  participant API as /api/connect
+  participant AD as getAdapter('mt5')
+  participant VPS as VPS /connect
+  participant DB as Supabase
+  U->>CP: enters login + investor password + server
+  CP->>API: POST {broker, login, password, server, label}
+  API->>API: createSupabaseServer() → verify session
+  API->>AD: connect(credentials)
+  AD->>VPS: POST /connect
+  VPS-->>AD: AccountInfo
+  AD-->>API: BrokerAccount
+  API->>DB: upsert mt5_credentials (user_id, login)
+  API->>DB: upsert accounts (login, user_id, balance, equity...)
+  API->>U: Set-Cookie mt5_account (httpOnly, 8h)
+  API-->>CP: 200 + account
+  CP->>U: redirect /settings/accounts
+</div>
+</div>
+
+<h2>5 · Select-account flow (<code>POST /api/select-account</code>)</h2>
+<div class="panel">
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant AP as /settings/accounts
+  participant API as /api/select-account
+  participant DB as Supabase
+  participant VPS as VPS /connect
+  U->>AP: click account row
+  AP->>API: POST {login}
+  API->>DB: select mt5_credentials where user_id=auth.uid AND login=?
+  DB-->>API: {password, server}
+  API->>VPS: POST /connect
+  VPS-->>API: AccountInfo
+  API->>DB: update accounts.balance/equity
+  API->>U: Set-Cookie mt5_account
+  API-->>AP: 200
+  AP->>U: redirect /overview
+</div>
+<div class="note">⚑ <b>Secret handling.</b> Investor passwords sit in <code>mt5_credentials.password</code> as plain text protected only by RLS. Encryption at rest (pgcrypto / KMS-wrapped) would harden this against a leaked service-role key.</div>
+</div>
+
+<h2>6 · Sync pipeline — the heart of the system</h2>
+<div class="panel">
+<p>Two entry points share the same inner pipeline: the browser Sync Now button (<code>POST /api/sync</code>) and the Vercel cron (<code>GET /api/cron/sync-all</code>). The Python <code>mac/sync.py</code> is a third, manual entry point for local runs.</p>
+<div class="mermaid">
+flowchart TD
+  A1[Sync Now button<br/>POST /api/sync]:::cli --> G[Gate: read mt5_account cookie<br/>401 if missing]
+  A2[Vercel cron hourly<br/>GET /api/cron/sync-all]:::cli --> G2[Gate: verify CRON_SECRET header]
+  A3[mac/sync.py CLI]:::cli --> G3[Env-var creds]
+
+  G --> RL
+  G2 --> LOOP[For each row in mt5_credentials]
+  LOOP --> RL
+  G3 --> RL
+
+  RL{last_synced_at<br/>&lt; 15 min ago?}:::warn
+  RL -- yes --> SKIP[429 / skip]
+  RL -- no --> MUX[Acquire VPS mutex<br/>lib/sync-mutex.ts]:::warn
+  MUX --> VC[vpsConnect login,pwd,server]
+  VC --> VA[vpsAccount → upsert accounts]
+  VA --> VH[vpsHistory from=... to=now]
+  VH --> NRM[normalizeDeals<br/>pair IN+OUT by position_id<br/>sum commission+swap<br/>compute pnl_pips, duration]
+  NRM --> BAT[Batch upsert trades<br/>500 rows, onConflict=account_id,position_id]:::warn
+  BAT --> SES[Rebuild sessions<br/>daily P&amp;L aggregate]:::warn
+  SES --> TS[Update accounts.last_synced_at]
+  TS --> REL[Release mutex]
+  REL --> OUT[Return {synced, days, accountId}]
+
+  classDef cli fill:#2a1f06,stroke:#78350f,color:#fde68a;
+  classDef warn fill:#2b1a05,stroke:#b45309,color:#fde68a;
+</div>
+<h3>Optimisation hotspots in the sync pipeline</h3>
+<ul>
+  <li><b>Full history every run.</b> <code>vpsHistory</code> fetches from 2000-01-01 by default. Switch to incremental pull using <code>accounts.last_synced_at</code> so payloads shrink as history grows.</li>
+  <li><b>In-memory mutex.</b> <code>lib/sync-mutex.ts</code> is a single-process promise queue; multi-worker deployments (Vercel functions scale horizontally) will bypass it. Replace with a Supabase advisory lock or Redis lock.</li>
+  <li><b>Sessions rebuild.</b> Full re-aggregation on every sync is O(trades). Do an incremental UPSERT keyed on dates touched by new trades, or move to a Postgres view / materialised view.</li>
+  <li><b>Sequential cron.</b> <code>/api/cron/sync-all</code> loops accounts serially because of the single-session VPS. Either shard across multiple VPSes per broker or queue jobs with backoff.</li>
+  <li><b>Batch size = 500.</b> Works, but a 6 MB Supabase payload limit means very wide rows (journal text, screenshot URLs arrays) can overflow. Consider dynamic sizing.</li>
+  <li><b>Partial closes.</b> <code>normalizer</code> keeps only the last OUT deal. Aggregate lot-weighted close price instead so reported pnl_pips is accurate.</li>
+</ul>
+</div>
+
+<h2>7 · Next.js API surface</h2>
+<div class="panel">
+<table>
+  <tr><th>Route</th><th>Method(s)</th><th>Reads</th><th>Writes</th><th>Touches VPS?</th></tr>
+  <tr><td><code>/api/auth/signout</code></td><td>POST</td><td>session</td><td>clears cookies</td><td>no</td></tr>
+  <tr><td><code>/api/connect</code></td><td>POST</td><td>session</td><td>accounts, mt5_credentials, cookie</td><td>yes</td></tr>
+  <tr><td><code>/api/select-account</code></td><td>POST</td><td>mt5_credentials</td><td>accounts, cookie</td><td>yes</td></tr>
+  <tr><td><code>/api/sync</code></td><td>POST</td><td>mt5_credentials, accounts</td><td>accounts, trades, sessions</td><td>yes</td></tr>
+  <tr><td><code>/api/cron/sync-all</code></td><td>GET</td><td>all mt5_credentials</td><td>accounts, trades, sessions (per acct)</td><td>yes</td></tr>
+  <tr><td><code>/api/account</code></td><td>GET</td><td>cookie, accounts</td><td>—</td><td>no</td></tr>
+  <tr><td><code>/api/account/delete</code></td><td>DELETE</td><td>accounts</td><td>sessions→trades→accounts→mt5_credentials</td><td>no</td></tr>
+  <tr><td><code>/api/account/clear-trades</code></td><td>DELETE</td><td>accounts</td><td>sessions, trades</td><td>no</td></tr>
+  <tr><td><code>/api/trades</code></td><td>GET/POST/PUT/DELETE</td><td>trades</td><td>trades (manual + journal fields)</td><td>no</td></tr>
+  <tr><td><code>/api/sessions</code></td><td>GET/PUT</td><td>sessions</td><td>sessions (journal fields)</td><td>no</td></tr>
+  <tr><td><code>/api/weekly-reviews</code></td><td>GET/POST/PUT/DELETE</td><td>weekly_reviews</td><td>weekly_reviews</td><td>no</td></tr>
+  <tr><td><code>/api/playbooks</code></td><td>GET/POST/PUT/DELETE</td><td>playbooks</td><td>playbooks</td><td>no</td></tr>
+  <tr><td><code>/api/tags</code></td><td>GET/POST/PUT/DELETE</td><td>tags</td><td>tags</td><td>no</td></tr>
+  <tr><td><code>/api/mistakes</code></td><td>GET/POST/PUT/DELETE</td><td>mistakes</td><td>mistakes</td><td>no</td></tr>
+  <tr><td><code>/api/rules</code></td><td>GET/POST/PUT/DELETE</td><td>rules</td><td>rules</td><td>no</td></tr>
+  <tr><td><code>/api/profile</code></td><td>GET/PUT</td><td>user_metadata</td><td>user_metadata</td><td>no</td></tr>
+  <tr><td><code>/api/security/change-password</code></td><td>POST</td><td>auth user</td><td>auth password</td><td>no</td></tr>
+</table>
+</div>
+
+<h2>8 · Database schema (Supabase / Postgres)</h2>
+<div class="panel">
+<div class="mermaid">
+erDiagram
+  AUTH_USERS ||--o{ ACCOUNTS : owns
+  AUTH_USERS ||--o{ MT5_CREDENTIALS : stores
+  AUTH_USERS ||--o{ PLAYBOOKS : defines
+  AUTH_USERS ||--o{ TAGS : defines
+  AUTH_USERS ||--o{ MISTAKES : defines
+  AUTH_USERS ||--o{ RULES : defines
+  AUTH_USERS ||--o{ WEEKLY_REVIEWS : writes
+  ACCOUNTS  ||--o{ TRADES : has
+  ACCOUNTS  ||--o{ SESSIONS : summarises
+  ACCOUNTS  ||--o{ WEEKLY_REVIEWS : scopes
+  PLAYBOOKS ||--o{ TRADES : tags
+
+  AUTH_USERS {
+    uuid id PK
+    text email
+  }
+  ACCOUNTS {
+    uuid id PK
+    uuid user_id FK
+    bigint login UK
+    text broker
+    numeric balance
+    numeric equity
+    timestamptz last_synced_at
+  }
+  MT5_CREDENTIALS {
+    uuid id PK
+    uuid user_id FK
+    bigint login
+    text password
+    text server
+    text label
+  }
+  TRADES {
+    uuid id PK
+    uuid account_id FK
+    bigint position_id
+    text symbol
+    text direction
+    numeric open_price
+    numeric close_price
+    numeric net_pnl
+    text source "sync or manual"
+    uuid playbook_id FK
+    uuid_array mistake_ids
+    text_array screenshot_urls
+    text trade_thesis
+    int confidence
+    int execution_rating
+    int setup_rating
+  }
+  SESSIONS {
+    uuid id PK
+    uuid account_id FK
+    date date
+    numeric total_pnl
+    int trade_count
+    text market_conditions
+    int day_rating
+  }
+  PLAYBOOKS {
+    uuid id PK
+    uuid user_id FK
+    text name
+    text entry_rules
+    text exit_rules
+  }
+  TAGS {
+    uuid id PK
+    uuid user_id FK
+    text name
+    text category
+  }
+  MISTAKES {
+    uuid id PK
+    uuid user_id FK
+    text name
+    bool is_default
+  }
+  RULES {
+    uuid id PK
+    uuid user_id FK
+    text name
+    bool is_active
+  }
+  WEEKLY_REVIEWS {
+    uuid id PK
+    uuid user_id FK
+    uuid account_id FK
+    date week_start
+    jsonb goals_met
+  }
+</div>
+<h3>Key constraints and RLS</h3>
+<ul>
+  <li>Unique keys prevent duplicate syncs: <code>trades(account_id, position_id)</code>, <code>sessions(account_id, date)</code>, <code>mt5_credentials(user_id, login)</code>.</li>
+  <li>Manual trades use a dedicated sequence <code>manual_trade_position_seq</code> producing negative position_ids so they never collide with MT5 ticket IDs during upsert.</li>
+  <li>RLS: <code>service_role</code> has full access (used by API routes). User-facing policies scope by <code>auth.uid() = user_id</code>, and <code>trades</code>/<code>sessions</code> join through <code>accounts</code>.</li>
+  <li>Cascades: deleting an account cascades to trades and sessions. Deleting an auth user cascades to all user-scoped tables.</li>
+</ul>
+<div class="note">⚑ <b>RLS EXISTS joins.</b> The <code>trades</code> and <code>sessions</code> policies use <code>EXISTS (SELECT 1 FROM accounts ...)</code>. Make sure <code>accounts(user_id)</code> and <code>trades(account_id)</code> are indexed (they are) — but also consider denormalising <code>user_id</code> onto <code>trades</code> so RLS can short-circuit without a join when query volume grows.</div>
+</div>
+
+<h2>9 · Rate limiting, concurrency, idempotency</h2>
+<div class="panel">
+<div class="mermaid">
+flowchart LR
+  subgraph Guardrails
+    RL[Per-account rate limit<br/>15 min via last_synced_at]:::g
+    MX[VPS mutex<br/>in-memory promise queue]:::g
+    UPS[Idempotent upserts<br/>onConflict keys]:::g
+    FKD[FK-ordered deletes<br/>sessions→trades→accounts→credentials]:::g
+  end
+  RL --> MX --> UPS
+  UPS --> FKD
+  classDef g fill:#0e2a1f,stroke:#065f46,color:#bbf7d0;
+</div>
+<ul>
+  <li><b>Rate limit</b> is soft: it returns 429 on <code>/api/sync</code> and silently skips in cron.</li>
+  <li><b>Mutex</b> only covers a single Node.js process. On Vercel, every function instance has its own lock — real protection comes from the VPS itself rejecting overlapping <code>/connect</code> calls, which means parallel syncs race and the loser gets a session with the wrong account.</li>
+  <li><b>Idempotency</b> is strong: reruns of <code>/api/sync</code> converge rather than duplicate.</li>
+</ul>
+</div>
+
+<h2>10 · Consolidated optimisation checklist</h2>
+<div class="panel">
+<ol>
+  <li><b>Incremental history sync</b> — stop fetching from 2000-01-01; use <code>last_synced_at</code> with a small overlap window for safety.</li>
+  <li><b>Distributed VPS lock</b> — replace <code>sync-mutex.ts</code> with a Postgres advisory lock (<code>pg_try_advisory_lock</code>) keyed on account login.</li>
+  <li><b>Encrypt investor passwords</b> at rest with <code>pgcrypto</code> + a key loaded from server env, so a leaked service-role key alone is insufficient.</li>
+  <li><b>Materialised view for sessions</b> (or incremental UPSERT touched-dates only) instead of full rebuild per sync.</li>
+  <li><b>Denormalise <code>user_id</code> onto <code>trades</code> and <code>sessions</code></b> to simplify RLS and let Postgres use straight index scans.</li>
+  <li><b>Queue-based cron</b> — <code>/api/cron/sync-all</code> should enqueue per-account jobs (e.g. Supabase Queues, Upstash QStash, pg_cron) so long runs don't hit Vercel function timeouts.</li>
+  <li><b>Partial-close handling</b> in the normalizer — sum lot-weighted exit prices so reported pnl_pips matches reality for multi-leg exits.</li>
+  <li><b>Cookie slimming</b> — store only <code>accountId</code> in the <code>mt5_account</code> cookie; look up balance/equity on demand. Shrinks every request and avoids stale numbers.</li>
+  <li><b>VPS health exposure</b> — surface <code>/health</code> on the dashboard and block the Sync button if <code>mt5_connected=false</code>; today users can fire a sync that silently 500s.</li>
+  <li><b>Observability</b> — structured logs (request id, account id, duration, rows upserted) per sync run; the current codebase logs ad-hoc strings.</li>
+  <li><b>cTrader adapter</b> is a stub; the <code>BrokerAdapter</code> interface is in place, but wiring it will require a second VPS bridge or a shared process.</li>
+  <li><b>Tests</b> — VPS and mac normalizer have tests; API routes and the sync orchestration do not. Adding integration tests around <code>/api/sync</code> would catch most optimisation regressions.</li>
+</ol>
+</div>
+
+<h2>11 · End-to-end request lifecycle (worked example)</h2>
+<div class="panel">
+<p>User clicks <b>Sync Now</b> on the dashboard. The diagram below shows every hop.</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant MW as middleware.ts
+  participant API as /api/sync
+  participant LIB as lib/(vps, normalizer, db, mutex)
+  participant V as VPS FastAPI
+  participant S as Supabase
+  B->>MW: POST /api/sync (cookies)
+  MW->>MW: getUser() refresh JWT
+  MW->>API: forward with user
+  API->>S: select mt5_credentials where user_id, login
+  API->>API: rate limit check on accounts.last_synced_at
+  API->>LIB: acquire mutex
+  LIB->>V: POST /connect (X-API-Key)
+  V-->>LIB: AccountInfo
+  LIB->>V: GET /account
+  V-->>LIB: AccountInfo
+  LIB->>S: upsert accounts
+  LIB->>V: GET /history?from=...&to=now
+  V-->>LIB: deals[]
+  LIB->>LIB: normalizeDeals → TradeRow[]
+  LIB->>S: upsert trades in batches of 500
+  LIB->>S: upsert sessions (daily rollups)
+  LIB->>S: update accounts.last_synced_at
+  LIB-->>API: release mutex
+  API-->>B: 200 {synced, days}
+  B->>B: toast + re-render tables
+</div>
+</div>
+
+<p class="sub" style="margin-top:40px">Generated from <code>CLAUDE_1.md</code> plus a full read of <code>vps/</code>, <code>mac/</code>, <code>dashboard/app/api/</code>, <code>dashboard/lib/</code>, <code>dashboard/middleware.ts</code>, and <code>supabase/migrations/</code>. Each diagram is authored in Mermaid — right-click any diagram to save it as SVG if you want to drop it into a review doc.</p>
+
+</div>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    background: '#1c2230',
+    primaryColor: '#1f2937',
+    primaryTextColor: '#e6edf3',
+    primaryBorderColor: '#374151',
+    lineColor: '#6ee7b7',
+    secondaryColor: '#111827',
+    tertiaryColor: '#0b1020'
+  },
+  flowchart: { curve: 'basis', htmlLabels: true },
+  sequence: { actorMargin: 40 }
+});
+</script>
+</body>
+</html>

@@ -31,7 +31,7 @@ interface SettingsNavItem {
 /** USER section — account and security settings. */
 const USER_NAV: SettingsNavItem[] = [
   { label: "Profile",      href: "/settings/profile",      available: true },
-  { label: "Security",     href: "/settings/security",     available: false },
+  { label: "Security",     href: "/settings/security",     available: true },
   { label: "Subscription", href: "/settings/subscription", available: false },
 ];
 
@@ -41,7 +41,9 @@ const GENERAL_NAV: SettingsNavItem[] = [
   { label: "Commissions & fees",  href: "/settings/commissions",         available: false },
   { label: "Trade settings",      href: "/settings/trade-settings",      available: false },
   { label: "Global settings",     href: "/settings/global-settings",     available: false },
-  { label: "Tags management",     href: "/settings/tags",                available: false },
+  { label: "Tags management",     href: "/settings/tags",                available: true },
+  { label: "Mistake library",     href: "/settings/mistakes",            available: true },
+  { label: "Trading rules",       href: "/settings/rules",               available: true },
   { label: "Import history",      href: "/settings/import-history",      available: false },
   { label: "Log history",         href: "/settings/log-history",         available: false },
 ];

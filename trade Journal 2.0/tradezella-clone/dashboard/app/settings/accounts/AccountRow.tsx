@@ -25,7 +25,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import type { AccountRowData } from "./page";
+import type { AccountRowData } from "@/lib/types";
 
 /**
  * Formats an ISO timestamp to a localized date + time string.

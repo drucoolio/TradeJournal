@@ -92,12 +92,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Rule 2: Already logged-in user visiting login or register → redirect to settings/accounts
+  // Rule 2: Already logged-in user visiting login or register → redirect to dashboard
   // No point showing the auth form to someone who is already authenticated
   if (user && (pathname === "/login" || pathname === "/register")) {
-    const accountsUrl = request.nextUrl.clone();
-    accountsUrl.pathname = "/settings/accounts";
-    return NextResponse.redirect(accountsUrl);
+    const dashboardUrl = request.nextUrl.clone();
+    dashboardUrl.pathname = "/overview";
+    return NextResponse.redirect(dashboardUrl);
   }
 
   // Return the supabaseResponse — IMPORTANT: this may contain refreshed session

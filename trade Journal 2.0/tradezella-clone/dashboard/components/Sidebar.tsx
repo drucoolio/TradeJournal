@@ -24,7 +24,7 @@ const NAV = [
           d="M3 3v18h18M7 16l4-4 4 4 4-8" />
       </svg>
     ),
-    available: false,
+    available: true,
   },
   {
     label: "Day View",
@@ -35,7 +35,7 @@ const NAV = [
           d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
       </svg>
     ),
-    available: false,
+    available: true,
   },
   {
     label: "Notebook",
@@ -68,7 +68,7 @@ const NAV = [
           d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
       </svg>
     ),
-    available: false,
+    available: true,
   },
 ];
 
@@ -102,7 +102,7 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
         {NAV.map((item) => {
-          const isActive = pathname === item.href;
+          const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <div key={item.href}>
               {item.available ? (

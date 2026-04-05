@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createSupabaseServer } from "@/lib/supabase";
 import { getAdapter } from "@/lib/adapters";
 import {
@@ -9,7 +10,7 @@ import {
 } from "@/lib/db";
 import type { BrokerAccount } from "@/lib/broker";
 import type { DbTrade, DbAccount } from "@/lib/db";
-import Sidebar from "@/components/Sidebar";
+import DashboardShell from "@/components/DashboardShell";
 import SyncButton from "@/components/SyncButton";
 import DashboardHeader from "@/components/DashboardHeader";
 import CumulativePnlChart from "@/components/charts/CumulativePnlChart";
@@ -199,26 +200,36 @@ interface PageProps {
 
 export default async function OverviewPage({ searchParams }: PageProps) {
   // ── Auth ──────────────────────────────────────────────────────────────────
-  const cookieStore = await cookies();
-  const raw = cookieStore.get("mt5_account")?.value;
-  if (!raw) redirect("/settings/accounts");
-  const account = JSON.parse(raw) as BrokerAccount;
-
-  // Get logged-in user for multi-account lookup
   const supabase = await createSupabaseServer();
   const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
 
   // ── All user accounts ─────────────────────────────────────────────────────
-  const allAccounts: DbAccount[] = user
-    ? await getAccountsByUserId(user.id)
-    : [];
+  const allAccounts: DbAccount[] = await getAccountsByUserId(user.id);
 
-  // Fallback: ensure the currently active account is always in the list,
-  // even if it was synced before Phase 3 (before user_id was added to accounts).
-  if (!allAccounts.find(a => a.login === Number(account.login))) {
-    const current = await getAccountByLogin(Number(account.login));
-    if (current) allAccounts.unshift(current);
-  }
+  // If user has no accounts at all, redirect to account setup
+  if (allAccounts.length === 0) redirect("/settings/accounts");
+
+  // Read the legacy mt5_account cookie for broker adapter (open positions).
+  // If not set, build a minimal BrokerAccount from the first DB account so the
+  // page still renders (open positions just won't load without broker creds).
+  const cookieStore = await cookies();
+  const raw = cookieStore.get("mt5_account")?.value;
+  const firstAcct = allAccounts[0];
+  const account: BrokerAccount = raw
+    ? (JSON.parse(raw) as BrokerAccount)
+    : {
+        login: String(firstAcct.login),
+        broker: firstAcct.broker as BrokerAccount["broker"],
+        name: firstAcct.name,
+        server: "",
+        currency: firstAcct.currency,
+        balance: firstAcct.balance,
+        equity: firstAcct.equity,
+        margin: 0,
+        margin_free: 0,
+        leverage: firstAcct.leverage,
+      };
 
   // ── Filter params ─────────────────────────────────────────────────────────
   const selectedPeriod = searchParams?.period ?? "all";
@@ -242,8 +253,9 @@ export default async function OverviewPage({ searchParams }: PageProps) {
   const accountIds = filteredAccounts.map(a => a.id);
 
   // ── Data fetch ────────────────────────────────────────────────────────────
+  const adapter = (() => { try { return getAdapter(account.broker); } catch { return null; } })();
   const [positionsResult, trades] = await Promise.all([
-    getAdapter(account.broker).getOpenPositions().catch(() => []),
+    adapter?.getOpenPositions().catch(() => []) ?? Promise.resolve([]),
     getTradesForAccounts(accountIds, from, to),
   ]);
 
@@ -258,9 +270,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
   const currency = filteredAccounts[0]?.currency ?? account.currency ?? "USD";
 
   return (
-    <div className="flex h-screen bg-[#f4f5f7] overflow-hidden">
-      <Sidebar />
-
+    <DashboardShell>
       <div className="flex-1 flex flex-col overflow-hidden">
 
         {/* Top bar */}
@@ -384,18 +394,22 @@ export default async function OverviewPage({ searchParams }: PageProps) {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {recentTrades.map(t => (
-                      <tr key={t.id} className="hover:bg-gray-50 transition">
-                        <td className="px-4 py-2.5 text-gray-500 text-xs">
-                          {t.close_time
-                            ? new Date(t.close_time).toLocaleDateString("en-US", {
-                                month: "2-digit", day: "2-digit", year: "numeric",
-                              })
-                            : "—"}
-                        </td>
-                        <td className="px-4 py-2.5 font-medium text-gray-800">{t.symbol}</td>
-                        <td className={`px-4 py-2.5 text-right font-semibold ${
-                          t.net_pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                          {t.net_pnl >= 0 ? "+" : ""}${Math.abs(t.net_pnl).toFixed(2)}
+                      <tr key={t.id} className="hover:bg-gray-50 transition cursor-pointer">
+                        <td colSpan={3} className="p-0">
+                          <Link href={`/trades/${t.id}`} className="grid grid-cols-[1fr_1fr_1fr] w-full">
+                            <span className="px-4 py-2.5 text-gray-500 text-xs">
+                              {t.close_time
+                                ? new Date(t.close_time).toLocaleDateString("en-US", {
+                                    month: "2-digit", day: "2-digit", year: "numeric",
+                                  })
+                                : "—"}
+                            </span>
+                            <span className="px-4 py-2.5 font-medium text-gray-800">{t.symbol}</span>
+                            <span className={`px-4 py-2.5 text-right font-semibold ${
+                              t.net_pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                              {t.net_pnl >= 0 ? "+" : ""}${Math.abs(t.net_pnl).toFixed(2)}
+                            </span>
+                          </Link>
                         </td>
                       </tr>
                     ))}
@@ -458,6 +472,6 @@ export default async function OverviewPage({ searchParams }: PageProps) {
           )}
         </div>
       </div>
-    </div>
+    </DashboardShell>
   );
 }

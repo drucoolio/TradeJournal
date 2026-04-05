@@ -14,17 +14,12 @@
  * controlled inputs and fetch() to POST updates to /api/profile.
  */
 
-import { redirect } from "next/navigation";
-import { createSupabaseServer } from "@/lib/supabase";
+import { requireAuth } from "@/lib/auth";
 import ProfileForm from "./ProfileForm";
 
 export default async function ProfilePage() {
-  // Get the authenticated user from the SSR cookie-based client
-  const supabase = await createSupabaseServer();
-  const { data: { user }, error } = await supabase.auth.getUser();
-
-  // If not authenticated, redirect to login (middleware should catch this too)
-  if (error || !user) redirect("/login");
+  // Get the authenticated user
+  const user = await requireAuth();
 
   // Extract profile fields from user_metadata (may be empty if never set)
   const meta = user.user_metadata ?? {};

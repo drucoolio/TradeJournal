@@ -228,21 +228,380 @@ new trade appears without page refresh, date filter works correctly
 
 ---
 
-### Phase 6 — Journal, tags & notes
-**Goal:** Per-trade journaling, tagging, and screenshot upload.
+### Phase 6 — Trade Journal System (Full Analytical Journal)
+**Goal:** A comprehensive 3-level journal system (per-trade, daily, weekly) with playbooks, tags, mistake tracking, rules engine, and media uploads. This is the core differentiator of the product.
 
-**Backend:**
-- Tag CRUD API (create, list, assign to trade)
-- Screenshot upload to Supabase Storage
+---
 
-**Frontend:**
-- Tag management UI: create tags with colour picker, assign to trades
-- Per-trade journal panel: click a trade → slide-out panel with
-  notes, mood selector, setup type, mistakes fields
-- Screenshot upload button in the trade panel
-- Filter dashboard trades by tag
+#### 6A — Per-Trade Journal
 
-**Test gate:** Tag a trade, write a note, upload screenshot, filter by tag — all work
+Every trade gets a detailed journal entry. When a user clicks a trade, a slide-out panel (or full page) opens with these sections:
+
+**Pre-Trade Plan (filled before or after the trade):**
+- Setup type — selected from the user's Playbook Library (e.g. "breakout", "pullback", "reversal", "range fade")
+- Trade thesis / reasoning — free text explaining why they entered
+- Entry criteria checklist — customizable per strategy (e.g. "✓ Higher timeframe trend aligned", "✓ Key level identified")
+- Planned R:R ratio — what was the intended risk:reward before entry
+- Confidence level — 1 to 5 scale (how confident was this setup?)
+
+**Execution Data (auto-filled from MT5 sync — already exists):**
+- Entry price, exit price, SL, TP, lot size, duration, gross P&L, commission, swap, net P&L, pips
+
+**Post-Trade Review (filled after the trade closes):**
+- What went right — free text
+- What went wrong — free text
+- Execution rating — 1 to 5 scale (did I follow my plan?)
+- Setup quality rating — 1 to 5 scale (A+, A, B, C, D setup in hindsight)
+- Mistakes — multi-select from the Mistake Library (e.g. "moved stop loss", "oversized position", "FOMO entry", "early exit", "didn't take profit", "revenge trade", "traded against trend")
+- Lessons learned — free text
+
+**Psychology & Emotions:**
+- Mood at entry — emoji/icon selector: calm, anxious, excited, revenge, FOMO, bored, confident, frustrated, greedy, patient
+- Mood at exit — same selector
+- Emotional notes — free text for anything about mental state
+
+**Media & Screenshots:**
+- Chart screenshots — upload multiple images (entry chart, exit chart, higher timeframe context)
+- Stored in Supabase Storage, linked to the trade via URLs
+- Future: annotation tools on screenshots
+
+**Tags:**
+- Assign tags from the Tag System (see 6E below)
+- Auto-tags generated from trade data: symbol, direction (long/short), win/loss, session (Asian/London/NY)
+
+**Database changes for per-trade journal:**
+- Expand `trades` table with new columns:
+  - `trade_thesis` text — pre-trade reasoning
+  - `planned_rr` numeric — intended risk:reward
+  - `confidence` integer (1–5) — pre-trade confidence
+  - `execution_rating` integer (1–5) — did I follow my plan?
+  - `setup_rating` integer (1–5) — quality of setup in hindsight
+  - `went_right` text — post-trade: what worked
+  - `went_wrong` text — post-trade: what didn't work
+  - `lessons` text — key takeaways
+  - `mood_entry` text — emotional state at entry
+  - `mood_exit` text — emotional state at exit
+  - `emotion_notes` text — additional emotional notes
+  - `playbook_id` uuid FK → playbooks — which strategy was used
+  - `mistake_ids` uuid[] — array of mistake IDs from the mistake library
+  - `screenshot_urls` text[] — array of Supabase Storage URLs (replaces single screenshot_url)
+- Existing columns already in schema: `tags`, `notes`, `setup_type`, `mood`, `mistakes`, `screenshot_url`
+  - `setup_type` will be replaced by `playbook_id` (FK to playbooks table)
+  - `mood` will be replaced by `mood_entry` + `mood_exit` (more granular)
+  - `mistakes` (text) will be replaced by `mistake_ids` (uuid[] FK to mistake library)
+  - `screenshot_url` (single) will be replaced by `screenshot_urls` (array)
+
+---
+
+#### 6B — Daily Session Journal
+
+One entry per trading day. Combines auto-calculated stats with manual reflection.
+
+**Auto-Calculated (from existing sessions table + trades):**
+- Total P&L for the day
+- Number of trades
+- Win rate for the day
+- Best and worst trade of the day
+- Total commissions + swap
+
+**Manual Reflection Fields:**
+- Market conditions — select: trending, ranging, volatile, choppy, mixed, news-driven
+- What went well today — free text
+- What didn't go well today — free text
+- Rules followed / rules broken — checklist from the Rules Engine (see 6G)
+- Key takeaways — free text
+- Goals for tomorrow — free text
+- Overall day rating — 1 to 5 scale
+- Emotional state tracking — morning / midday / end-of-day mood selectors
+
+**Database changes for daily journal:**
+- Expand `sessions` table with new columns:
+  - `market_conditions` text — overall market assessment
+  - `went_well` text — daily reflection positive
+  - `went_poorly` text — daily reflection negative
+  - `takeaways` text — key lessons
+  - `goals_tomorrow` text — next day goals
+  - `day_rating` integer (1–5) — overall rating
+  - `mood_morning` text — emotional state at start of day
+  - `mood_midday` text — emotional state midday
+  - `mood_close` text — emotional state at end of day
+  - `rules_followed` uuid[] — which rules were followed (FK to rules table)
+  - `rules_broken` uuid[] — which rules were broken (FK to rules table)
+
+---
+
+#### 6C — Weekly Review Journal
+
+One entry per trading week. Higher-level reflection and goal tracking.
+
+**Auto-Calculated:**
+- Weekly P&L, total trades, win rate
+- Best and worst trade of the week
+- Comparison to previous week (P&L delta, win rate delta)
+- Most traded symbols and their P&L
+- Average hold time for the week
+- Average R:R achieved
+
+**Manual Reflection Fields:**
+- Goals from last week — were they met? (checkbox review of previous week's goals)
+- Top 3 lessons from this week — free text
+- Patterns I noticed — free text
+- Strategy adjustments for next week — free text
+- Goals for next week — free text (these carry forward to next week's review)
+- Confidence level heading into next week — 1 to 5 scale
+- Overall week rating — 1 to 5 scale
+
+**Database: new `weekly_reviews` table:**
+- `id` uuid PK
+- `user_id` uuid FK → auth.users
+- `account_id` uuid FK → accounts (nullable — can be cross-account)
+- `week_start` date — Monday of the reviewed week
+- `week_end` date — Sunday of the reviewed week
+- `goals_met` jsonb — array of { goal: string, met: boolean }
+- `top_lessons` text — top 3 lessons
+- `patterns` text — patterns noticed
+- `strategy_adjustments` text — changes for next week
+- `goals_next_week` text — goals to carry forward
+- `confidence` integer (1–5) — heading into next week
+- `week_rating` integer (1–5) — overall week rating
+- `created_at` / `updated_at` timestamptz
+- UNIQUE(user_id, account_id, week_start)
+
+---
+
+#### 6D — Playbook / Strategy Library
+
+Users define their trading setups. Each trade can be linked to a playbook entry for tracking strategy performance.
+
+**Playbook entry fields:**
+- Name (e.g. "Bull Flag Breakout", "Supply Zone Rejection")
+- Description — detailed explanation of the setup
+- Entry rules — bulleted list of conditions that must be met
+- Exit rules — when to take profit or cut the trade
+- Ideal market conditions — when this setup works best
+- Timeframes — which timeframes this applies to
+- Risk parameters — default position size, R:R target
+- Example screenshots — reference chart images
+
+**Analytics powered by playbook linking:**
+- Win rate per strategy
+- Average P&L per strategy
+- Average R:R per strategy
+- Best/worst performing strategy over time
+- Number of trades per strategy
+
+**Database: new `playbooks` table:**
+- `id` uuid PK
+- `user_id` uuid FK → auth.users
+- `name` text NOT NULL
+- `description` text
+- `entry_rules` text
+- `exit_rules` text
+- `ideal_conditions` text
+- `timeframes` text[]
+- `default_rr` numeric
+- `example_screenshots` text[] — Supabase Storage URLs
+- `is_active` boolean default true — soft delete
+- `created_at` / `updated_at` timestamptz
+- UNIQUE(user_id, name)
+
+---
+
+#### 6E — Tag System
+
+User-defined tags with categories and colors for organizing and filtering trades.
+
+**Tag features:**
+- Custom tags with a name, color, and category
+- Categories: Strategy, Emotion, Market Condition, Mistake, Custom
+- Assign multiple tags to any trade
+- Filter trades by tag on the dashboard and journal pages
+- Tag analytics: P&L per tag, win rate per tag, frequency per tag
+
+**Database: expand existing `tags` table:**
+- Add `user_id` uuid FK → auth.users
+- Add `category` text — one of: strategy, emotion, market_condition, mistake, custom
+- Change UNIQUE from (name) to (user_id, name) — per-user tags
+- Keep existing `color` text field
+
+---
+
+#### 6F — Mistake Library
+
+Pre-defined + custom mistake categories for consistent post-trade analysis.
+
+**Default mistakes (seeded for new users):**
+- Moved stop loss
+- Oversized position
+- FOMO entry
+- Revenge trade
+- Traded against trend
+- Early exit
+- Didn't take profit at target
+- Entered too late
+- No stop loss
+- Broke max daily loss rule
+- Traded during news
+- Overtraded
+
+**Mistake tracking analytics:**
+- Frequency of each mistake over time
+- "Top 3 mistakes this month" summary
+- P&L impact per mistake type (how much did each mistake cost?)
+- Mistake trend chart — are you making fewer mistakes over time?
+
+**Database: new `mistakes` table:**
+- `id` uuid PK
+- `user_id` uuid FK → auth.users
+- `name` text NOT NULL
+- `description` text — explanation of the mistake
+- `is_default` boolean — true for seeded mistakes, false for custom
+- `created_at` timestamptz
+- UNIQUE(user_id, name)
+
+---
+
+#### 6G — Rules Engine
+
+Users define their personal trading rules. Daily journal includes a checklist for rule adherence.
+
+**Rule examples:**
+- "Max 3 trades per day"
+- "No trading before major news events"
+- "Always use a stop loss"
+- "Don't trade in the first 15 minutes of session open"
+- "Maximum 2% risk per trade"
+- "No trading when emotional"
+
+**Rule tracking:**
+- Daily checklist in the Daily Session Journal — mark each rule as followed or broken
+- Rule adherence score: percentage of rules followed over time
+- Trend chart: are you following your rules more consistently over time?
+- "Most broken rule" analytics
+
+**Database: new `rules` table:**
+- `id` uuid PK
+- `user_id` uuid FK → auth.users
+- `name` text NOT NULL — the rule statement
+- `description` text — additional context
+- `is_active` boolean default true — only active rules appear in the daily checklist
+- `created_at` timestamptz
+- UNIQUE(user_id, name)
+
+---
+
+#### 6H — Manual Trade Entry
+
+Users can add trades manually — for brokers not connected via API, paper trades, or trades from other platforms.
+
+**Use cases:**
+- User trades on a broker that doesn't have API sync (e.g. cTrader, TradingView paper)
+- User wants to log a trade from a prop firm challenge on a different platform
+- User wants to backtest and log hypothetical trades for review
+- Triggered from the "Manual upload" option in the account three-dot menu, or from a global "+ Add Trade" button
+
+**Manual trade form fields:**
+- Account — select which account to attach the trade to (or create a "Manual" account)
+- Symbol — text input with autocomplete from previously traded symbols
+- Direction — buy or sell toggle
+- Lot size — numeric input
+- Open price — numeric input
+- Close price — numeric input
+- SL / TP — optional numeric inputs
+- Open time — date + time picker
+- Close time — date + time picker
+- Commission — optional numeric (default 0)
+- Swap — optional numeric (default 0)
+- Notes — optional free text
+
+**Auto-calculated on save:**
+- `duration_minutes` — computed from open_time and close_time
+- `pnl` — computed from open_price, close_price, lot_size, direction
+- `pnl_pips` — computed from price difference and symbol pip size
+- `net_pnl` — pnl + commission + swap
+- `position_id` — auto-generated unique ID (negative numbers or UUID-based to distinguish from MT5 synced trades)
+
+**Key rules:**
+- Manual trades are flagged with `source = 'manual'` so they can be distinguished from synced trades
+- Manual trades are NOT overwritten during MT5 sync (sync uses `onConflict: account_id, position_id` — manual trades have unique position IDs that don't collide with MT5)
+- Manual trades can be edited after creation (synced trades cannot have their execution data edited)
+- Manual trades can be deleted (synced trades can only be cleared in bulk via "Clear trades")
+
+**Database changes:**
+- Add `source` column to `trades` table: `text DEFAULT 'sync'` — values: `'sync'` (from MT5) or `'manual'` (user-entered)
+- Manual trades get a generated `position_id` using a sequence or negative number range to avoid collision with MT5 position IDs
+
+**API:**
+- `POST /api/trades/manual` — create a manual trade (validates all fields, computes derived values, inserts into trades table)
+- `PUT /api/trades/manual/:id` — edit a manual trade (only allowed for source='manual')
+- `DELETE /api/trades/manual/:id` — delete a manual trade (only allowed for source='manual')
+
+**UI:**
+- Modal or full-page form accessible from:
+  - Account row three-dot menu → "Manual upload"
+  - Global "+ Add Trade" button on the trades/journal page
+- Form has smart defaults (today's date, last used symbol)
+- Live P&L preview as user fills in prices
+- After save, trade appears in the trades table and journal like any other trade
+
+---
+
+#### 6I — Journal UI Components
+
+**Trade Journal Slide-Out Panel:**
+- Clicking any trade in the trades table opens a slide-out panel from the right
+- Tabs: Overview (auto-filled data) | Pre-Trade | Post-Trade | Psychology | Media
+- Save button persists journal entries to the database
+- Navigation: prev/next trade arrows at the top
+
+**Daily Journal Page (`/journal/daily`):**
+- Calendar view showing which days have journal entries (green dot)
+- Click a date → opens that day's journal with auto-stats at top + reflection form below
+- Quick-fill from trades: the journal pre-populates trade stats automatically
+
+**Weekly Review Page (`/journal/weekly`):**
+- Week selector (prev/next week arrows)
+- Auto-calculated stats panel at top
+- Review form below with goals tracking from previous week
+- "Start Review" button if no entry exists for the selected week
+
+**Playbook Library Page (`/settings/playbooks`):**
+- Card-based grid of all playbooks
+- Click to edit, create new, archive
+- Each card shows: name, win rate, trade count, avg P&L
+
+**Tags Management Page (`/settings/tags`):**
+- Already in SettingsSidebar as "Tags management"
+- List all tags with color picker, category selector, rename, delete
+- Usage count per tag
+
+---
+
+#### Phase 6 — Implementation Order
+
+Build in this sequence to avoid dependencies:
+
+1. **6E — Tag System** (foundation — tags are used everywhere)
+2. **6F — Mistake Library** (foundation — mistakes referenced in trade journal)
+3. **6G — Rules Engine** (foundation — rules referenced in daily journal)
+4. **6D — Playbook Library** (foundation — playbooks referenced in trade journal)
+5. **6H — Manual Trade Entry** (no dependencies — standalone feature, unlocks journaling for non-MT5 trades)
+6. **6A — Per-Trade Journal** (uses tags, mistakes, playbooks)
+7. **6B — Daily Session Journal** (uses rules engine)
+8. **6C — Weekly Review Journal** (uses daily journal data)
+9. **6I — Journal UI Components** (builds on all the above)
+
+**Migration file:** `004_journal_system.sql` — single migration that adds all new tables and columns
+
+**Test gate:**
+- Create a playbook → link a trade to it → see playbook performance stats
+- Tag a trade → filter by tag on dashboard → see tag analytics
+- Manually add a trade → see it in trades table with correct P&L calculations → edit it → delete it
+- Manual trades survive MT5 sync without being overwritten or duplicated
+- Open trade journal → fill pre-trade + post-trade sections → save → reopen and see data persisted
+- Open daily journal → see auto-stats → fill reflection → mark rules followed/broken → save
+- Open weekly review → see previous week's goals → mark as met/not → set next week goals → save
+- View mistake analytics → see top mistakes and their P&L impact
 
 ---
 
@@ -252,10 +611,14 @@ new trade appears without page refresh, date filter works correctly
 **Backend:**
 - Weekly/monthly aggregations query
 - CSV export endpoint
+- Journal-aware reports (include journal notes, tags, playbook stats in reports)
 
 **Frontend:**
 - Reports page: weekly/monthly P&L breakdown
 - Heatmaps: performance by time of day, day of week, symbol
+- Playbook performance report (win rate, P&L per strategy)
+- Mistake frequency report
+- Rule adherence trends
 - PDF export button
 - CSV export button
 
@@ -325,42 +688,69 @@ requirement so the codebase remains readable across long sessions and context re
 ```
 tradezella-clone/
 ├── CLAUDE_1.md
-├── vps/                          ← VPS FastAPI bridge (Kamatera)
+├── .gitignore
+├── vps/                              ← VPS FastAPI bridge (Kamatera)
 │   ├── main.py
 │   ├── mt5_client.py
 │   └── requirements.txt
-├── mac/                          ← Mac-side sync + normalizer
+├── mac/                              ← Mac-side sync + normalizer
 │   ├── normalizer.py
 │   ├── sync.py
 │   ├── requirements.txt
 │   └── tests/
-├── dashboard/                    ← Next.js app
-│   ├── middleware.ts              ← route protection (Supabase Auth)
+├── dashboard/                        ← Next.js app
+│   ├── vercel.json                   ← Vercel cron config (daily auto-sync)
+│   ├── middleware.ts                 ← route protection (Supabase Auth)
 │   ├── app/
-│   │   ├── page.tsx              ← redirect to /accounts or /login
-│   │   ├── login/page.tsx        ← email/password sign in
-│   │   ├── register/page.tsx     ← create account
-│   │   ├── accounts/page.tsx     ← linked MT5 accounts picker
-│   │   ├── connect/page.tsx      ← add new MT5 account
-│   │   ├── overview/page.tsx     ← main dashboard
+│   │   ├── page.tsx                  ← redirect to /settings/accounts or /login
+│   │   ├── login/page.tsx            ← email/password sign in
+│   │   ├── register/page.tsx         ← create account
+│   │   ├── overview/page.tsx         ← main dashboard
+│   │   ├── settings/
+│   │   │   ├── layout.tsx            ← shared settings layout (Sidebar + SettingsSidebar)
+│   │   │   ├── profile/
+│   │   │   │   ├── page.tsx          ← profile page (Server Component)
+│   │   │   │   └── ProfileForm.tsx   ← editable profile form (Client Component)
+│   │   │   ├── security/
+│   │   │   │   ├── page.tsx          ← security settings (Server Component)
+│   │   │   │   └── PasswordForm.tsx  ← password change form (Client Component)
+│   │   │   ├── accounts/
+│   │   │   │   ├── page.tsx          ← accounts table (Server Component)
+│   │   │   │   └── AccountRow.tsx    ← account row + 3-dot menu (Client Component)
+│   │   │   └── connect/
+│   │   │       └── page.tsx          ← add new MT5 account (inside settings layout)
 │   │   └── api/
-│   │       ├── connect/          ← VPS connect + save credentials
-│   │       ├── sync/             ← MT5 → Supabase sync
-│   │       ├── select-account/   ← activate an account from /accounts
-│   │       └── auth/signout/     ← clear session
+│   │       ├── connect/              ← VPS connect + save credentials
+│   │       ├── sync/                 ← MT5 → Supabase sync (mutex + rate limit + reconnect)
+│   │       ├── select-account/       ← activate an account
+│   │       ├── profile/              ← GET/PUT user profile
+│   │       ├── security/
+│   │       │   └── change-password/  ← POST password change
+│   │       ├── account/
+│   │       │   ├── delete/           ← DELETE account (FK-ordered)
+│   │       │   └── clear-trades/     ← DELETE trades for an account
+│   │       ├── cron/
+│   │       │   └── sync-all/         ← GET auto-sync all accounts (Vercel Cron)
+│   │       └── auth/signout/         ← clear session
 │   ├── components/
-│   │   └── SyncButton.tsx
+│   │   ├── Sidebar.tsx               ← main app sidebar (with Profile link)
+│   │   ├── SettingsSidebar.tsx        ← settings left nav (USER + GENERAL sections)
+│   │   ├── SyncButton.tsx            ← resync button (handles 429 rate limit)
+│   │   └── DashboardHeader.tsx       ← header with account dropdown (useTransition)
 │   ├── lib/
-│   │   ├── supabase.ts           ← SSR-aware Supabase clients
-│   │   ├── db.ts                 ← typed DB queries
-│   │   ├── vps.ts                ← VPS API wrapper
-│   │   ├── broker.ts             ← broker types + adapter interface
-│   │   ├── normalizer.ts         ← TypeScript deal normalizer
+│   │   ├── supabase.ts               ← SSR-aware Supabase clients (3 variants)
+│   │   ├── db.ts                     ← typed DB queries
+│   │   ├── vps.ts                    ← VPS API wrapper
+│   │   ├── broker.ts                 ← broker types + adapter interface
+│   │   ├── normalizer.ts             ← TypeScript deal normalizer
+│   │   ├── sync-mutex.ts             ← promise-based VPS access mutex
 │   │   └── adapters/
+│   │       └── mt5.ts                ← MT5 broker adapter
 │   ├── package.json
 │   └── .env.local
 └── supabase/
     └── migrations/
         ├── 001_initial_schema.sql
-        └── 002_auth_accounts.sql
+        ├── 002_auth_accounts.sql
+        └── 003_add_last_synced_at.sql
 ```

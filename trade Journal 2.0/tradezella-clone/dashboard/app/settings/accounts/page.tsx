@@ -16,31 +16,14 @@
  * Each row has a clickable account name that selects it and goes to the dashboard.
  */
 
-import { redirect } from "next/navigation";
-import { createSupabaseServer, serverClient } from "@/lib/supabase";
+import { requireAuth } from "@/lib/auth";
+import { serverClient } from "@/lib/supabase";
+import type { AccountRowData } from "@/lib/types";
 import AccountRow from "./AccountRow";
-
-/** Combined credential + account data for one MT5 account row. */
-export interface AccountRowData {
-  credId: string;        // mt5_credentials.id (PK)
-  login: number;         // MT5 account number
-  server: string;        // broker server name
-  label: string | null;  // user-defined nickname
-  createdAt: string;     // when the credential was added
-  // Fields from accounts table (null if never synced)
-  accountId: string | null;
-  name: string | null;
-  currency: string | null;
-  balance: number | null;
-  updatedAt: string | null; // last sync timestamp
-  tradeCount: number;       // number of trades for this account (used in delete confirmation)
-}
 
 export default async function SettingsAccountsPage() {
   // Verify authentication — redirect to login if no session
-  const supabase = await createSupabaseServer();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/login");
+  const user = await requireAuth();
 
   // Use service-role client to bypass RLS for reading credential + account data
   const supa = serverClient();
