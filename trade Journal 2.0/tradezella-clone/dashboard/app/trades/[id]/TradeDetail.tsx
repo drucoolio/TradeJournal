@@ -26,9 +26,15 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import RichNoteEditor from "@/components/editor/RichNoteEditor";
+import TemplatePickerMenu from "@/components/editor/TemplatePickerMenu";
+import TemplateEditorModal from "@/components/templates/TemplateEditorModal";
+import { emptyDoc } from "@/lib/editor/defaults";
+import { extractPlainText, isEmptyDoc } from "@/lib/editor/serialize";
+import type { TipTapDoc, NoteKind } from "@/lib/editor/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -56,6 +62,22 @@ export default function TradeDetail({
   // ─── Right Panel Tab State ────────────────────────────────────────
   const [rightTab, setRightTab] = useState<"chart" | "notes" | "running_pnl">("chart");
   const [notesTab, setNotesTab] = useState<"trade_note" | "daily_journal">("trade_note");
+
+  // ─── Rich Notes State (Trade note tab) ────────────────────────────
+  // The plain text `tradeNotes` below is kept in sync for legacy search
+  // compatibility — the JSON AST is the source of truth.
+  const [tradeNotesJson, setTradeNotesJson] = useState<TipTapDoc>(() => emptyDoc());
+  const [tradeNotesHtml, setTradeNotesHtml] = useState<string>("<p></p>");
+  const tradeDefaultAppliedRef = useRef<string | null>(null);
+
+  // ─── Rich Notes State (Daily Journal tab) ─────────────────────────
+  const [dailyNotesJson, setDailyNotesJson] = useState<TipTapDoc>(() => emptyDoc());
+  const [dailyNotesHtml, setDailyNotesHtml] = useState<string>("<p></p>");
+  const dailyDefaultAppliedRef = useRef<string | null>(null);
+
+  // ─── Template modal (shared between both sub-tabs) ────────────────
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateModalKind, setTemplateModalKind] = useState<NoteKind>("trade");
 
   // ─── Editable Journal Fields ──────────────────────────────────────
   const [tradeNotes, setTradeNotes]         = useState(trade.notes ?? "");
@@ -88,6 +110,109 @@ export default function TradeDetail({
   const [saving, setSaving]         = useState(false);
   const [saved, setSaved]           = useState(false);
   const [error, setError]           = useState("");
+
+  // Hydrate trade-note rich state whenever the trade changes.
+  useEffect(() => {
+    const incomingJson = (trade.notes_json ?? null) as TipTapDoc | null;
+    if (incomingJson) {
+      setTradeNotesJson(incomingJson);
+      setTradeNotesHtml(trade.notes_html ?? "");
+      setTradeNotes(extractPlainText(incomingJson));
+    } else if (trade.notes) {
+      const doc: TipTapDoc = {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: trade.notes }] }],
+      };
+      setTradeNotesJson(doc);
+      setTradeNotesHtml(`<p>${String(trade.notes).replace(/</g, "&lt;")}</p>`);
+    } else {
+      setTradeNotesJson(emptyDoc());
+      setTradeNotesHtml("<p></p>");
+    }
+    tradeDefaultAppliedRef.current = null; // re-arm default lookup for this trade
+  }, [trade]);
+
+  // Hydrate daily-journal rich state whenever the session changes.
+  useEffect(() => {
+    if (!session) {
+      setDailyNotesJson(emptyDoc());
+      setDailyNotesHtml("<p></p>");
+      return;
+    }
+    const incomingJson = (session.notes_json ?? null) as TipTapDoc | null;
+    if (incomingJson) {
+      setDailyNotesJson(incomingJson);
+      setDailyNotesHtml(session.notes_html ?? "");
+      setDailyNotes(extractPlainText(incomingJson));
+    } else if (session.notes) {
+      const doc: TipTapDoc = {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: session.notes }] }],
+      };
+      setDailyNotesJson(doc);
+      setDailyNotesHtml(`<p>${String(session.notes).replace(/</g, "&lt;")}</p>`);
+    } else {
+      setDailyNotesJson(emptyDoc());
+      setDailyNotesHtml("<p></p>");
+    }
+    dailyDefaultAppliedRef.current = null;
+  }, [session]);
+
+  // Auto-apply the user's default trade template on an empty trade note.
+  useEffect(() => {
+    if (!trade?.id) return;
+    if (tradeDefaultAppliedRef.current === trade.id) return;
+    if (!isEmptyDoc(tradeNotesJson)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/note-templates", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          templates: Array<{ id: string; content_json: TipTapDoc; content_html: string; is_default_trade: boolean }>;
+        };
+        const def = data.templates.find((t) => t.is_default_trade);
+        if (!def || cancelled) return;
+        if (!isEmptyDoc(tradeNotesJson)) return;
+        tradeDefaultAppliedRef.current = trade.id;
+        setTradeNotesJson(def.content_json);
+        setTradeNotesHtml(def.content_html);
+        setTradeNotes(extractPlainText(def.content_json));
+      } catch {
+        /* ignore — nicety, not critical */
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trade?.id]);
+
+  // Auto-apply the user's default journal template on an empty daily note.
+  useEffect(() => {
+    if (!session?.id) return;
+    if (dailyDefaultAppliedRef.current === session.id) return;
+    if (!isEmptyDoc(dailyNotesJson)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/note-templates", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          templates: Array<{ id: string; content_json: TipTapDoc; content_html: string; is_default_journal: boolean }>;
+        };
+        const def = data.templates.find((t) => t.is_default_journal);
+        if (!def || cancelled) return;
+        if (!isEmptyDoc(dailyNotesJson)) return;
+        dailyDefaultAppliedRef.current = session.id;
+        setDailyNotesJson(def.content_json);
+        setDailyNotesHtml(def.content_html);
+        setDailyNotes(extractPlainText(def.content_json));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
 
   // Reset form when trade changes
   useEffect(() => {
@@ -127,6 +252,8 @@ export default function TradeDetail({
         body: JSON.stringify({
           id: trade.id,
           notes: tradeNotes.trim() || null,
+          notes_json: isEmptyDoc(tradeNotesJson) ? null : tradeNotesJson,
+          notes_html: isEmptyDoc(tradeNotesJson) ? null : tradeNotesHtml,
           trade_thesis: tradeThesis.trim() || null,
           execution_rating: executionRating > 0 ? executionRating : null,
           playbook_id: playbookId || null,
@@ -150,9 +277,9 @@ export default function TradeDetail({
     } finally {
       setSaving(false);
     }
-  }, [trade, saving, tradeNotes, tradeThesis, executionRating, playbookId,
-      selectedMistakes, selectedTags, moodEntry, moodExit, confidence,
-      plannedRr, wentRight, wentWrong, lessons]);
+  }, [trade, saving, tradeNotes, tradeNotesJson, tradeNotesHtml, tradeThesis,
+      executionRating, playbookId, selectedMistakes, selectedTags, moodEntry,
+      moodExit, confidence, plannedRr, wentRight, wentWrong, lessons]);
 
   // ─── Save Daily Journal ───────────────────────────────────────────
   const saveDaily = useCallback(async () => {
@@ -167,6 +294,8 @@ export default function TradeDetail({
         body: JSON.stringify({
           id: session.id,
           notes: dailyNotes.trim() || null,
+          notes_json: isEmptyDoc(dailyNotesJson) ? null : dailyNotesJson,
+          notes_html: isEmptyDoc(dailyNotesJson) ? null : dailyNotesHtml,
           market_conditions: marketConditions.trim() || null,
         }),
       });
@@ -179,7 +308,7 @@ export default function TradeDetail({
     } finally {
       setSaving(false);
     }
-  }, [session, saving, dailyNotes, marketConditions]);
+  }, [session, saving, dailyNotes, dailyNotesJson, dailyNotesHtml, marketConditions]);
 
   // ─── Derived Values ───────────────────────────────────────────────
   const pnl = trade.net_pnl ?? 0;
@@ -674,16 +803,30 @@ export default function TradeDetail({
                   </button>
                 </div>
 
-                {/* Trade note content */}
+                {/* Trade note content (rich editor) */}
                 {notesTab === "trade_note" && (
                   <div>
-                    <textarea
-                      value={tradeNotes}
-                      onChange={(e) => setTradeNotes(e.target.value)}
-                      placeholder="Write your trade notes here..."
-                      rows={12}
-                      className="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-900
-                                 focus:outline-none focus:border-indigo-400 transition resize-none bg-white"
+                    <div className="mb-2 flex justify-end">
+                      <TemplatePickerMenu
+                        onApply={({ json, html }) => {
+                          setTradeNotesJson(json);
+                          setTradeNotesHtml(html);
+                          setTradeNotes(extractPlainText(json));
+                        }}
+                        onManage={() => {
+                          setTemplateModalKind("trade");
+                          setTemplateModalOpen(true);
+                        }}
+                      />
+                    </div>
+                    <RichNoteEditor
+                      value={tradeNotesJson}
+                      onChange={({ json, html, text }) => {
+                        setTradeNotesJson(json);
+                        setTradeNotesHtml(html);
+                        setTradeNotes(text);
+                      }}
+                      placeholder="Write your trade notes here…"
                     />
                     <div className="flex justify-end mt-2">
                       <button
@@ -703,25 +846,28 @@ export default function TradeDetail({
                     {session ? (
                       <div className="space-y-3">
                         <div>
-                          <label className="block text-xs text-gray-500 mb-1">Market conditions</label>
-                          <textarea
-                            value={marketConditions}
-                            onChange={(e) => setMarketConditions(e.target.value)}
-                            placeholder="What was the market doing today?"
-                            rows={4}
-                            className="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-900
-                                       focus:outline-none focus:border-indigo-400 transition resize-none bg-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-500 mb-1">Daily notes</label>
-                          <textarea
-                            value={dailyNotes}
-                            onChange={(e) => setDailyNotes(e.target.value)}
-                            placeholder="End of day reflections..."
-                            rows={6}
-                            className="w-full border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-900
-                                       focus:outline-none focus:border-indigo-400 transition resize-none bg-white"
+                          <div className="mb-1 flex items-center justify-between">
+                            <label className="block text-xs text-gray-500">Daily notes</label>
+                            <TemplatePickerMenu
+                              onApply={({ json, html }) => {
+                                setDailyNotesJson(json);
+                                setDailyNotesHtml(html);
+                                setDailyNotes(extractPlainText(json));
+                              }}
+                              onManage={() => {
+                                setTemplateModalKind("journal");
+                                setTemplateModalOpen(true);
+                              }}
+                            />
+                          </div>
+                          <RichNoteEditor
+                            value={dailyNotesJson}
+                            onChange={({ json, html, text }) => {
+                              setDailyNotesJson(json);
+                              setDailyNotesHtml(html);
+                              setDailyNotes(text);
+                            }}
+                            placeholder="End of day reflections…"
                           />
                         </div>
                         <div className="flex justify-end">
@@ -756,6 +902,13 @@ export default function TradeDetail({
           </div>
         </div>
       </div>
+
+      {/* Template management modal — shared by both Trade note and Daily Journal sub-tabs. */}
+      <TemplateEditorModal
+        open={templateModalOpen}
+        onClose={() => setTemplateModalOpen(false)}
+        kindContext={templateModalKind}
+      />
     </div>
   );
 }

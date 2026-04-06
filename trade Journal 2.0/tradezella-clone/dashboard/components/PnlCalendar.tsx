@@ -38,6 +38,7 @@
 "use client"; // Required: uses useState for month/year navigation
 
 import { useState } from "react";
+import Link from "next/link";
 
 /** P&L and trade count for one trading day */
 interface DayData {
@@ -178,9 +179,20 @@ export default function PnlCalendar({ data }: Props) {
             info.pnl < 0 ? "bg-red-50"   : // losing day → light red
                            "bg-white";      // exactly $0 → white (rare but possible)
 
+          // Every populated cell links to the Day View for that exact date.
+          // Day View reads ?date=YYYY-MM-DD on mount and auto-expands/scrolls
+          // to the matching card. We link every in-month cell (not just ones
+          // with trades) so the user can still drill in on an empty day and
+          // see the "no trades" empty state + journal button.
           return (
-            <div key={i}
-              className={`${bg} min-h-[72px] p-1.5 flex flex-col justify-between group relative`}
+            <Link
+              key={i}
+              href={`/day-view?date=${key}`}
+              className={`${bg} min-h-[72px] p-1.5 flex flex-col justify-between group relative
+                          cursor-pointer transition hover:ring-2 hover:ring-indigo-400
+                          hover:ring-inset focus:outline-none focus-visible:ring-2
+                          focus-visible:ring-indigo-500`}
+              aria-label={`Open ${key} in day view`}
             >
               {/* Day number — highlighted in indigo if today */}
               <span className={`text-xs font-medium self-end leading-none
@@ -202,7 +214,7 @@ export default function PnlCalendar({ data }: Props) {
                   </p>
                 </div>
               )}
-            </div>
+            </Link>
           );
         })}
       </div>

@@ -13,6 +13,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type { DbTrade, DbSession } from "@/lib/db";
 import DayViewToolbar from "@/components/day-view/DayViewToolbar";
 import DayViewCalendar from "@/components/day-view/DayViewCalendar";
@@ -144,6 +145,12 @@ function computeStats(trades: DbTrade[]): DayStats {
 // ─── Component ───────────────────────────────────────────────────────
 
 export default function DayViewClient({ trades, accounts, sessions, rules }: Props) {
+  // ?date=YYYY-MM-DD is set when the user clicks a cell in the dashboard
+  // PnlCalendar. We read it once on mount (below) to auto-expand + scroll
+  // to that day, mirroring the existing handleCalendarSelect behaviour.
+  const searchParams = useSearchParams();
+  const dateParam = searchParams.get("date");
+
   const [mode, setMode] = useState<Mode>("day");
   const [range, setRange] = useState<Range>("all");
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
@@ -210,10 +217,34 @@ export default function DayViewClient({ trades, accounts, sessions, rules }: Pro
   // ─── Default expand state: most recent day expanded ──────────────
   useEffect(() => {
     if (groups.length > 0 && expandedKeys.size === 0) {
-      setExpandedKeys(new Set([groups[0].key]));
+      // If the user arrived via ?date=YYYY-MM-DD (e.g. from the dashboard
+      // PnlCalendar), prefer expanding that specific day over the default
+      // "most recent" behaviour.
+      const initialKey = dateParam && groups.some((g) => g.key === dateParam)
+        ? dateParam
+        : groups[0].key;
+      setExpandedKeys(new Set([initialKey]));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups.length]);
+
+  // ─── ?date= param: auto-expand + scroll when arriving from calendar ──
+  // Runs once per dateParam change. Uses the shared handleCalendarSelect
+  // path below (defined later) so we share the same expand-and-scroll
+  // logic with the in-page sidebar calendar.
+  useEffect(() => {
+    if (!dateParam) return;
+    // Switch to day mode (in case user was last in week mode)
+    if (mode === "week") setMode("day");
+    setExpandedKeys((prev) => new Set(prev).add(dateParam));
+    // Defer the scroll until after the card has mounted/laid out.
+    const id = setTimeout(() => {
+      const el = cardRefs.current[dateParam];
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateParam, groups.length]);
 
   function toggleExpanded(key: string) {
     setExpandedKeys((prev) => {

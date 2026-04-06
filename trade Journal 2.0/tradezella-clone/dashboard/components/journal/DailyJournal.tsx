@@ -34,7 +34,13 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import RichNoteEditor from "@/components/editor/RichNoteEditor";
+import TemplatePickerMenu from "@/components/editor/TemplatePickerMenu";
+import TemplateEditorModal from "@/components/templates/TemplateEditorModal";
+import { emptyDoc } from "@/lib/editor/defaults";
+import { extractPlainText, isEmptyDoc } from "@/lib/editor/serialize";
+import type { TipTapDoc } from "@/lib/editor/types";
 
 /** Session data shape (matches expanded DbSession + journal columns). */
 interface SessionData {
@@ -44,6 +50,8 @@ interface SessionData {
   total_pnl: number;
   trade_count: number;
   notes: string | null;
+  notes_json?: unknown | null;  // TipTap JSON AST for rich notes
+  notes_html?: string | null;   // HTML snapshot
   market_conditions: string | null;
   went_well: string | null;
   went_poorly: string | null;
@@ -89,7 +97,12 @@ export default function DailyJournal({ session, rules, onSaved }: DailyJournalPr
   const [moodClose, setMoodClose]               = useState("");
   const [rulesFollowed, setRulesFollowed]       = useState<string[]>([]);
   const [rulesBroken, setRulesBroken]           = useState<string[]>([]);
-  const [notes, setNotes]                       = useState("");
+  // Rich notes state (TipTap JSON AST + HTML snapshot + plain-text projection)
+  const [notesJson, setNotesJson]               = useState<TipTapDoc>(() => emptyDoc());
+  const [notesHtml, setNotesHtml]               = useState<string>("<p></p>");
+  const [notesText, setNotesText]               = useState<string>("");
+  const defaultAppliedRef = useRef<string | null>(null);
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
 
   // ─── UI State ─────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
@@ -110,10 +123,57 @@ export default function DailyJournal({ session, rules, onSaved }: DailyJournalPr
     setMoodClose(session.mood_close ?? "");
     setRulesFollowed(session.rules_followed ?? []);
     setRulesBroken(session.rules_broken ?? []);
-    setNotes(session.notes ?? "");
+    // Initialise rich notes from the session row.
+    const incomingJson = (session.notes_json ?? null) as TipTapDoc | null;
+    if (incomingJson) {
+      setNotesJson(incomingJson);
+      setNotesHtml(session.notes_html ?? "");
+      setNotesText(extractPlainText(incomingJson));
+    } else if (session.notes) {
+      const doc: TipTapDoc = {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: session.notes }] }],
+      };
+      setNotesJson(doc);
+      setNotesHtml(`<p>${session.notes.replace(/</g, "&lt;")}</p>`);
+      setNotesText(session.notes);
+    } else {
+      setNotesJson(emptyDoc());
+      setNotesHtml("<p></p>");
+      setNotesText("");
+    }
+    defaultAppliedRef.current = null;
     setSaved(false);
     setError("");
   }, [session]);
+
+  /** Auto-apply user's default journal template when notes are empty. */
+  useEffect(() => {
+    if (!session) return;
+    if (defaultAppliedRef.current === session.id) return;
+    if (!isEmptyDoc(notesJson)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/note-templates", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          templates: Array<{ id: string; content_json: TipTapDoc; content_html: string; is_default_journal: boolean }>;
+        };
+        const def = data.templates.find((t) => t.is_default_journal);
+        if (!def || cancelled) return;
+        if (!isEmptyDoc(notesJson)) return;
+        defaultAppliedRef.current = session.id;
+        setNotesJson(def.content_json);
+        setNotesHtml(def.content_html);
+        setNotesText(extractPlainText(def.content_json));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
 
   /**
    * Toggles a rule between three states:
@@ -173,7 +233,9 @@ export default function DailyJournal({ session, rules, onSaved }: DailyJournalPr
           mood_close:        moodClose || null,
           rules_followed:    rulesFollowed,
           rules_broken:      rulesBroken,
-          notes:             notes.trim() || null,
+          notes:             notesText.trim() || null,
+          notes_json:        isEmptyDoc(notesJson) ? null : notesJson,
+          notes_html:        isEmptyDoc(notesJson) ? null : notesHtml,
         }),
       });
 
@@ -191,7 +253,7 @@ export default function DailyJournal({ session, rules, onSaved }: DailyJournalPr
   }, [
     session, saving, marketConditions, wentWell, wentPoorly,
     takeaways, goalsTomorrow, dayRating, moodMorning, moodMidday,
-    moodClose, rulesFollowed, rulesBroken, notes, onSaved,
+    moodClose, rulesFollowed, rulesBroken, notesJson, notesHtml, notesText, onSaved,
   ]);
 
   /**
@@ -395,18 +457,36 @@ export default function DailyJournal({ session, rules, onSaved }: DailyJournalPr
         />
       </div>
 
-      {/* ─── Notes ────────────────────────────────────────────────── */}
+      {/* ─── Notes (rich text) ────────────────────────────────────── */}
       <div className="bg-white border border-gray-200 rounded-xl p-5">
-        <h3 className="text-sm font-semibold text-gray-900 mb-3">Notes</h3>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Any other thoughts about today..."
-          rows={3}
-          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900
-                     focus:outline-none focus:border-indigo-400 transition resize-none"
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-900">Notes</h3>
+          <TemplatePickerMenu
+            onApply={({ json, html }) => {
+              setNotesJson(json);
+              setNotesHtml(html);
+              setNotesText(extractPlainText(json));
+            }}
+            onManage={() => setTemplateModalOpen(true)}
+          />
+        </div>
+        <RichNoteEditor
+          value={notesJson}
+          onChange={({ json, html, text }) => {
+            setNotesJson(json);
+            setNotesHtml(html);
+            setNotesText(text);
+          }}
+          placeholder="Any other thoughts about today…"
         />
       </div>
+
+      {/* Template management modal */}
+      <TemplateEditorModal
+        open={templateModalOpen}
+        onClose={() => setTemplateModalOpen(false)}
+        kindContext="journal"
+      />
 
       {/* ─── Save Footer ──────────────────────────────────────────── */}
       <div className="flex items-center justify-between py-2">

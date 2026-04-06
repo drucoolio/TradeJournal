@@ -33,7 +33,13 @@
 
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import RichNoteEditor from "@/components/editor/RichNoteEditor";
+import TemplatePickerMenu from "@/components/editor/TemplatePickerMenu";
+import TemplateEditorModal from "@/components/templates/TemplateEditorModal";
+import { emptyDoc } from "@/lib/editor/defaults";
+import { extractPlainText, isEmptyDoc } from "@/lib/editor/serialize";
+import type { TipTapDoc } from "@/lib/editor/types";
 
 /** Trade object shape (matches DbTrade from lib/db.ts + new journal columns). */
 interface Trade {
@@ -57,6 +63,8 @@ interface Trade {
   // Journal fields
   tags: string[];
   notes: string | null;
+  notes_json?: unknown | null;  // TipTap JSON AST for the rich notes editor
+  notes_html?: string | null;   // HTML snapshot for read-only rendering
   trade_thesis: string | null;
   planned_rr: number | null;
   confidence: number | null;
@@ -110,7 +118,13 @@ export default function TradeJournalPanel({
   const [selectedTags, setSelectedTags]       = useState<string[]>([]);
   const [selectedMistakes, setSelectedMistakes] = useState<string[]>([]);
   const [playbookId, setPlaybookId]           = useState("");
-  const [notes, setNotes]                     = useState("");
+  // Rich notes state — plain text is kept in sync so the legacy `notes`
+  // column stays populated for search compatibility.
+  const [notesJson, setNotesJson]             = useState<TipTapDoc>(() => emptyDoc());
+  const [notesHtml, setNotesHtml]             = useState<string>("<p></p>");
+  const [notesText, setNotesText]             = useState<string>("");
+  const defaultAppliedRef = useRef<string | null>(null); // tracks per-trade "default applied" to avoid repeats
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
 
   // ─── UI State ─────────────────────────────────────────────────────
   const [saving, setSaving]   = useState(false);
@@ -137,10 +151,66 @@ export default function TradeJournalPanel({
     setSelectedTags(trade.tags ?? []);
     setSelectedMistakes(trade.mistake_ids ?? []);
     setPlaybookId(trade.playbook_id ?? "");
-    setNotes(trade.notes ?? "");
+    // Initialise rich notes: prefer the JSON AST, fall back to legacy plain
+    // text wrapped in a single paragraph, or an empty doc.
+    const incomingJson = (trade.notes_json ?? null) as TipTapDoc | null;
+    if (incomingJson) {
+      setNotesJson(incomingJson);
+      setNotesHtml(trade.notes_html ?? "");
+      setNotesText(extractPlainText(incomingJson));
+    } else if (trade.notes) {
+      const doc: TipTapDoc = {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: trade.notes }] }],
+      };
+      setNotesJson(doc);
+      setNotesHtml(`<p>${trade.notes.replace(/</g, "&lt;")}</p>`);
+      setNotesText(trade.notes);
+    } else {
+      setNotesJson(emptyDoc());
+      setNotesHtml("<p></p>");
+      setNotesText("");
+    }
+    defaultAppliedRef.current = null; // re-allow default template for the new trade
     setSaved(false);
     setError("");
   }, [trade]);
+
+  /**
+   * Auto-apply the user's default trade template when:
+   *   - a trade is opened
+   *   - the notes doc is empty
+   *   - we haven't already applied for this trade
+   * The default template lookup lives in useTemplates; we make a one-shot
+   * fetch here so this panel doesn't have to wrap every render in the hook.
+   */
+  useEffect(() => {
+    if (!trade) return;
+    if (defaultAppliedRef.current === trade.id) return;
+    if (!isEmptyDoc(notesJson)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/note-templates", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          templates: Array<{ id: string; content_json: TipTapDoc; content_html: string; is_default_trade: boolean }>;
+        };
+        const def = data.templates.find((t) => t.is_default_trade);
+        if (!def || cancelled) return;
+        // Only apply if still empty (user may have typed meanwhile)
+        if (!isEmptyDoc(notesJson)) return;
+        defaultAppliedRef.current = trade.id;
+        setNotesJson(def.content_json);
+        setNotesHtml(def.content_html);
+        setNotesText(extractPlainText(def.content_json));
+      } catch {
+        /* ignore — default-on-empty is a nicety, not critical */
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trade?.id]);
 
   /**
    * Saves all journal fields to the server via PUT /api/trades.
@@ -174,7 +244,9 @@ export default function TradeJournalPanel({
           tags:             selectedTags,
           mistake_ids:      selectedMistakes,
           playbook_id:      playbookId || null,
-          notes:            notes.trim() || null,
+          notes:            notesText.trim() || null, // legacy plain-text column
+          notes_json:       isEmptyDoc(notesJson) ? null : notesJson,
+          notes_html:       isEmptyDoc(notesJson) ? null : notesHtml,
         }),
       });
 
@@ -194,7 +266,7 @@ export default function TradeJournalPanel({
     trade, saving, tradeThesis, plannedRr, confidence,
     executionRating, setupRating, wentRight, wentWrong, lessons,
     moodEntry, moodExit, emotionNotes, selectedTags, selectedMistakes,
-    playbookId, notes, onSaved,
+    playbookId, notesJson, notesHtml, notesText, onSaved,
   ]);
 
   // Don't render anything if the panel is closed or no trade is selected
@@ -535,19 +607,32 @@ export default function TradeJournalPanel({
             </section>
           )}
 
-          {/* ═══ NOTES ════════════════════════════════════════════════ */}
+          {/* ═══ NOTES (rich text) ════════════════════════════════════ */}
           <section>
-            <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-              Notes
-            </h4>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Any additional notes about this trade..."
-              rows={3}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900
-                         focus:outline-none focus:border-indigo-400 transition resize-none"
-            />
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                Notes
+              </h4>
+              <TemplatePickerMenu
+                onApply={({ json, html }) => {
+                  setNotesJson(json);
+                  setNotesHtml(html);
+                  setNotesText(extractPlainText(json));
+                }}
+                onManage={() => setTemplateModalOpen(true)}
+              />
+            </div>
+            <div className="rich-notes-scope">
+              <RichNoteEditor
+                value={notesJson}
+                onChange={({ json, html, text }) => {
+                  setNotesJson(json);
+                  setNotesHtml(html);
+                  setNotesText(text);
+                }}
+                placeholder="Any additional notes about this trade…"
+              />
+            </div>
           </section>
         </div>
 
@@ -573,6 +658,13 @@ export default function TradeJournalPanel({
           </button>
         </div>
       </div>
+
+      {/* Template management modal — rendered on demand from the picker */}
+      <TemplateEditorModal
+        open={templateModalOpen}
+        onClose={() => setTemplateModalOpen(false)}
+        kindContext="trade"
+      />
     </>
   );
 }

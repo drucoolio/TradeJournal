@@ -1,0 +1,83 @@
+-- =====================================================================
+-- 005_performance_indexes.sql — Phase 1 of the scalability pass.
+-- =====================================================================
+--
+-- PURPOSE
+--   Adds a composite index on trades(account_id, close_time DESC) which
+--   is the single most-used query shape in the app. Every hot path
+--   filters by account_id and orders/filters by close_time:
+--
+--     - app/overview/page.tsx       → getTradesForAccounts(ids, from, to)
+--     - app/day-view/page.tsx       → getTradesForAccounts(ids)
+--     - app/trades/page.tsx         → getTradesForAccounts(ids)
+--     - api/trades (recent lookups) → same pattern
+--
+-- WHY A COMPOSITE INDEX
+--   The existing schema has TWO separate single-column indexes:
+--     trades_account_id_idx on trades(account_id)
+--     trades_close_time_idx on trades(close_time DESC)
+--
+--   Postgres CAN bitmap-combine two single-column indexes, but the plan
+--   is significantly slower than a single composite once row counts grow
+--   past a few thousand. A composite lets the planner:
+--     1. Seek directly to the account_id range (equality match on col 1)
+--     2. Walk close_time in sorted order (ordered match on col 2)
+--   …which means the ORDER BY close_time clause needs no sort step at all.
+--
+-- EXPECTED IMPACT
+--   At ~100 trades per user: imperceptible (<5ms either way).
+--   At  ~5k trades per user: 10–30x faster (200ms → 10ms).
+--   At  ~50k trades per user: 50–100x faster (2s → 20ms).
+--
+-- SAFETY
+--   CREATE INDEX CONCURRENTLY does not lock the table — reads and writes
+--   continue normally while the index is being built. It is safe to run
+--   on a live production database. The tradeoff is that CONCURRENTLY
+--   cannot run inside a transaction block, which is why this migration
+--   file contains no BEGIN/COMMIT wrapper.
+--
+--   IF NOT EXISTS makes this migration idempotent — re-running it is a
+--   no-op if the index is already there.
+--
+-- VERIFICATION
+--   After applying, run this in the Supabase SQL editor to confirm the
+--   planner is actually using the new index:
+--
+--     EXPLAIN ANALYZE
+--     SELECT * FROM trades
+--     WHERE account_id = '<some-account-uuid>'
+--     ORDER BY close_time DESC
+--     LIMIT 50;
+--
+--   You should see "Index Scan using trades_account_close_time_idx" in
+--   the plan. If you still see a bitmap heap scan on the two old single-
+--   column indexes, ANALYZE the table to refresh statistics:
+--
+--     ANALYZE trades;
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- Composite index for the dominant query shape:
+--   WHERE account_id = ? [AND close_time BETWEEN ? AND ?]
+--   ORDER BY close_time DESC
+-- ---------------------------------------------------------------------
+create index concurrently if not exists trades_account_close_time_idx
+  on trades (account_id, close_time desc);
+
+-- ---------------------------------------------------------------------
+-- Note: we are NOT dropping the existing single-column indexes
+-- (trades_account_id_idx and trades_close_time_idx) because:
+--
+--   1. They may still be used by queries that filter on only one of
+--      the two columns (e.g. counting all trades for an account without
+--      a time filter, or finding all trades in a global time window).
+--
+--   2. Dropping an index that another query depends on is a silent
+--      regression — the query works but is now doing a seq scan.
+--
+--   3. The storage cost of keeping them is small (a few MB at most at
+--      the scale we care about).
+--
+-- If index bloat becomes a real concern later, we can audit usage via
+-- pg_stat_user_indexes and drop anything with idx_scan = 0.
+-- ---------------------------------------------------------------------

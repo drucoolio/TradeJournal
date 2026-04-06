@@ -294,7 +294,8 @@ export async function PUT(req: NextRequest) {
   // Whitelist of journal fields that can be updated
   // Core trade data (prices, lots, times) is NOT editable via this endpoint
   const JOURNAL_FIELDS = [
-    "notes", "tags", "setup_type", "trade_thesis", "planned_rr",
+    "notes", "notes_json", "notes_html",        // rich-notes trio (plain, JSON AST, HTML snapshot)
+    "tags", "setup_type", "trade_thesis", "planned_rr",
     "confidence", "execution_rating", "setup_rating",
     "went_right", "went_wrong", "lessons",
     "mood_entry", "mood_exit", "emotion_notes",

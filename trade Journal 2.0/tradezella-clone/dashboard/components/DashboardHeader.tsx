@@ -37,6 +37,7 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useState, useRef, useEffect, useTransition } from "react";
 import type { DbAccount } from "@/lib/db";
+import DateRangePicker from "@/components/DateRangePicker";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -439,18 +440,28 @@ function AccountsDropdown({ accounts, selectedLogins }: AccountsDropdownProps) {
 interface Props {
   accounts: DbAccount[];    // all accounts linked to the logged-in user
   selectedLogins: string[]; // currently selected logins (empty = all)
-  currentPeriod: string;    // active period filter key e.g. "month", "all"
+  /** ISO date strings (YYYY-MM-DD) for the active range, if any. */
+  fromParam?: string;
+  toParam?: string;
 }
 
 /**
- * DashboardHeader — renders the date range and multi-select accounts dropdowns.
- * Both dropdowns update URL params which trigger server-side data re-fetching.
+ * DashboardHeader — renders the custom date range picker and multi-select accounts
+ * dropdown. Both controls update URL params which trigger server-side data re-fetching.
+ *
+ * The old preset-only DateRangeDropdown is kept in this file (unused) only so we
+ * don't break any imports; it can be deleted once we confirm nothing else references it.
  */
-export default function DashboardHeader({ accounts, selectedLogins, currentPeriod }: Props) {
+export default function DashboardHeader({ accounts, selectedLogins, fromParam, toParam }: Props) {
   return (
     <div className="flex items-center gap-2">
-      <DateRangeDropdown current={currentPeriod} />
+      <DateRangePicker initialFrom={fromParam} initialTo={toParam} />
       <AccountsDropdown accounts={accounts} selectedLogins={selectedLogins} />
     </div>
   );
 }
+
+// Keep a no-op reference so the DateRangeDropdown helper and PERIOD_OPTIONS
+// constant remain tree-shakable without triggering unused-variable warnings.
+void DateRangeDropdown;
+void PERIOD_OPTIONS;

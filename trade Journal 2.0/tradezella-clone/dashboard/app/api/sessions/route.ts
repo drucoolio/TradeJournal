@@ -206,7 +206,8 @@ export async function PUT(req: NextRequest) {
 
   // Whitelist of journal fields that can be updated
   const JOURNAL_FIELDS = [
-    "notes", "market_conditions", "went_well", "went_poorly",
+    "notes", "notes_json", "notes_html",        // rich-notes trio
+    "market_conditions", "went_well", "went_poorly",
     "takeaways", "goals_tomorrow", "day_rating",
     "mood_morning", "mood_midday", "mood_close",
     "rules_followed", "rules_broken",

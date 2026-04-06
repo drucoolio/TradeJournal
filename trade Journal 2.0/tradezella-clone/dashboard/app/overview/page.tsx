@@ -194,8 +194,10 @@ function RatioBar({ avgWin, avgLoss }: { avgWin: number; avgLoss: number }) {
 interface PageProps {
   // accounts: comma-separated MT5 login numbers e.g. "330000,420000"
   // Absent or empty = "All accounts" mode (no filter).
-  // period: one of "week" | "month" | "3months" | "ytd" | "all" (absent = all)
-  searchParams?: { accounts?: string; period?: string };
+  // from / to: ISO YYYY-MM-DD for the custom date range picker (new).
+  // period:    legacy preset key "week" | "month" | "3months" | "ytd" | "all".
+  //            Still honoured when `from`/`to` are absent for backward compat.
+  searchParams?: { accounts?: string; period?: string; from?: string; to?: string };
 }
 
 export default async function OverviewPage({ searchParams }: PageProps) {
@@ -232,8 +234,22 @@ export default async function OverviewPage({ searchParams }: PageProps) {
       };
 
   // ── Filter params ─────────────────────────────────────────────────────────
+  // New custom date range picker writes ?from=YYYY-MM-DD&to=YYYY-MM-DD.
+  // If those are present we use them directly. Otherwise fall back to the
+  // legacy ?period=... preset (kept so existing bookmarks keep working).
+  const fromParam = searchParams?.from;
+  const toParam   = searchParams?.to;
   const selectedPeriod = searchParams?.period ?? "all";
-  const { from, to }   = getPeriodRange(selectedPeriod);
+  let from: string | undefined;
+  let to:   string | undefined;
+  if (fromParam || toParam) {
+    from = fromParam;
+    to   = toParam;
+  } else {
+    const range = getPeriodRange(selectedPeriod);
+    from = range.from;
+    to   = range.to;
+  }
 
   // Parse the comma-separated ?accounts= param into an array of login strings.
   // Empty array = "All accounts" (no filter active).
@@ -256,7 +272,11 @@ export default async function OverviewPage({ searchParams }: PageProps) {
   const adapter = (() => { try { return getAdapter(account.broker); } catch { return null; } })();
   const [positionsResult, trades] = await Promise.all([
     adapter?.getOpenPositions().catch(() => []) ?? Promise.resolve([]),
-    getTradesForAccounts(accountIds, from, to),
+    // Phase 2: pass options object. If `from` is undefined (period="all"), the
+    // 12-month default window kicks in inside getTradesForAccounts. The hard
+    // 5000-row cap applies automatically. To truly fetch all time, the user
+    // would need a period that passes an explicit very-old `from` date.
+    getTradesForAccounts(accountIds, { from, to }),
   ]);
 
   const openPositions = Array.isArray(positionsResult) ? positionsResult : [];
@@ -282,7 +302,8 @@ export default async function OverviewPage({ searchParams }: PageProps) {
             <DashboardHeader
               accounts={allAccounts}
               selectedLogins={selectedLogins}
-              currentPeriod={selectedPeriod}
+              fromParam={from}
+              toParam={to}
             />
           </div>
         </header>

@@ -63,7 +63,9 @@ export interface DbTrade {
   swap: number;                  // overnight swap charges (positive or negative)
   net_pnl: number;               // pnl + commission + swap = what you actually made
   tags: string[];                // user-assigned tags for filtering
-  notes: string | null;          // trade journal notes
+  notes: string | null;          // legacy plain-text trade notes (kept populated via extractPlainText)
+  notes_json: unknown | null;    // TipTap JSON AST — source of truth for the rich editor
+  notes_html: string | null;     // HTML snapshot for read-only rendering / previews
   setup_type: string | null;     // e.g. "breakout", "reversal"
   mood: string | null;           // trader mood at entry
   mistakes: string | null;       // post-trade mistake notes
@@ -84,7 +86,9 @@ export interface DbSession {
   date: string;         // "YYYY-MM-DD" (the trading day)
   total_pnl: number;    // sum of net_pnl across all trades that day
   trade_count: number;  // number of completed trades that day
-  notes: string | null; // optional daily journal notes
+  notes: string | null;       // legacy plain-text daily notes
+  notes_json?: unknown | null; // TipTap JSON AST for the rich editor
+  notes_html?: string | null;  // HTML snapshot
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +186,61 @@ export async function getAllTrades(accountId: string): Promise<DbTrade[]> {
   return (data ?? []) as DbTrade[];
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2 scalability: default date windowing + hard row cap.
+// ---------------------------------------------------------------------------
+//
+// Every page that fetches trades (Overview, Day View, Trade View) used to
+// fetch the user's ENTIRE trade history with no cap. That works at 100 trades
+// per user and dies at 10k. The Phase 2 solution is two layers of safety:
+//
+//   1. DEFAULT_WINDOW_MONTHS — if the caller doesn't specify a `from` date,
+//      we automatically filter to "last N months". Callers can still pass
+//      an explicit `from` (including a very old one) to bypass this default.
+//
+//   2. DEFAULT_TRADE_LIMIT — a hard row cap applied to every query. Even if
+//      the date window is wide and the user is a heavy trader, we will never
+//      return more than this many rows in a single request. Callers that
+//      need more should paginate.
+//
+// These are constants (not env vars) because they're part of the product's
+// scalability contract — changing them should be a deliberate code review,
+// not a config flip.
+// ---------------------------------------------------------------------------
+
+/** Default lookback window in months when no `from` date is passed. */
+export const DEFAULT_WINDOW_MONTHS = 12;
+
+/** Hard cap on rows returned by a single getTradesForAccounts call. */
+export const DEFAULT_TRADE_LIMIT = 5000;
+
+/**
+ * Returns an ISO date string (YYYY-MM-DD) for N months before today.
+ * Used as the automatic lower bound when the caller omits `from`.
+ */
+function monthsAgoISO(months: number): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() - months);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * Options for getTradesForAccounts. Kept as an object so callers can pass
+ * only the fields they care about and we can add more later without breaking
+ * the positional signature.
+ */
+export interface GetTradesOptions {
+  /** ISO date (YYYY-MM-DD). Default: DEFAULT_WINDOW_MONTHS ago. Pass "1970-01-01" to truly fetch all time. */
+  from?: string;
+  /** ISO date (YYYY-MM-DD). Default: no upper bound. */
+  to?: string;
+  /** Max rows to return. Default: DEFAULT_TRADE_LIMIT. */
+  limit?: number;
+  /** Sort direction. Default: ascending (oldest → newest) for chart-friendly output. */
+  order?: "asc" | "desc";
+}
+
 /**
  * The MAIN trade query used by the dashboard overview page.
  *
@@ -197,15 +256,26 @@ export async function getAllTrades(accountId: string): Promise<DbTrade[]> {
  * The date string is implicitly cast to midnight UTC, which is fine because
  * trades are stored in UTC.
  *
+ * Scalability (Phase 2):
+ *   - If `from` is omitted, a 12-month default window is applied.
+ *   - A hard limit of DEFAULT_TRADE_LIMIT rows is always applied.
+ *   - Both of these are overridable per-call via the options object.
+ *
  * Returns empty array if accountIds is empty (prevents a DB call that would
  * return every trade in the database).
  */
 export async function getTradesForAccounts(
   accountIds: string[],
-  from?: string, // ISO date e.g. "2026-01-01" — filters close_time >= this date
-  to?: string,   // ISO date e.g. "2026-01-31" — filters close_time <= this date
+  options: GetTradesOptions = {},
 ): Promise<DbTrade[]> {
   if (!accountIds.length) return [];
+
+  const {
+    from = monthsAgoISO(DEFAULT_WINDOW_MONTHS),
+    to,
+    limit = DEFAULT_TRADE_LIMIT,
+    order = "asc",
+  } = options;
 
   const db = serverClient();
 
@@ -214,12 +284,13 @@ export async function getTradesForAccounts(
   let q = db
     .from("trades")
     .select("*")
-    .in("account_id", accountIds) // WHERE account_id IN (...)
-    .order("close_time", { ascending: true }); // chronological for charts
+    .in("account_id", accountIds)                             // WHERE account_id IN (...)
+    .gte("close_time", from)                                  // WHERE close_time >= from
+    .order("close_time", { ascending: order === "asc" })      // ORDER BY close_time
+    .limit(limit);                                            // hard row cap
 
-  // Apply optional date filters
-  if (from) q = q.gte("close_time", from); // close_time >= 'YYYY-MM-DD'
-  if (to)   q = q.lte("close_time", to);   // close_time <= 'YYYY-MM-DD'
+  // Optional upper bound (rarely needed — only when slicing historical ranges)
+  if (to) q = q.lte("close_time", to);
 
   const { data, error } = await q;
   if (error) {
@@ -227,6 +298,40 @@ export async function getTradesForAccounts(
     return [];
   }
   return (data ?? []) as DbTrade[];
+}
+
+/**
+ * Counts the total number of closed trades for a set of accounts, with the
+ * same date-window semantics as getTradesForAccounts. Uses the
+ * { count: "exact", head: true } pattern so Supabase returns only the count
+ * in a HEAD response — no row data transferred.
+ *
+ * Used by the Trade View page to show "Showing 500 of 1,234 trades" so the
+ * user knows when their window has been truncated by the hard cap.
+ */
+export async function countTradesForAccounts(
+  accountIds: string[],
+  options: Omit<GetTradesOptions, "limit" | "order"> = {},
+): Promise<number> {
+  if (!accountIds.length) return 0;
+
+  const { from = monthsAgoISO(DEFAULT_WINDOW_MONTHS), to } = options;
+
+  const db = serverClient();
+  let q = db
+    .from("trades")
+    .select("*", { count: "exact", head: true })
+    .in("account_id", accountIds)
+    .gte("close_time", from);
+
+  if (to) q = q.lte("close_time", to);
+
+  const { count, error } = await q;
+  if (error) {
+    console.error("countTradesForAccounts error:", error.message);
+    return 0;
+  }
+  return count ?? 0;
 }
 
 /**
